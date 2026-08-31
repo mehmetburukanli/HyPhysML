@@ -1,6 +1,6 @@
 ﻿# ========================================================================
-# HyPhysML ULTIMATE — Fizik-Bilgili Hibrit ML
-# Tum notebook hucreleri tek .py dosyasinda birlestiriliyor
+# HyPhysML — Physics-Informed Hybrid Machine Learning
+# Complete analysis pipeline consolidated into a single script
 # ========================================================================
 
 
@@ -81,7 +81,7 @@ print(f"Output directory: {OUT_DIR}")
 # ========================================================================
 # [CODE CELL 3]
 # ========================================================================
-# ── Parametreler ─────────────────────────────────────────────────
+# ── Parameters ───────────────────────────────────────────────────
 SEEDS     = [42, 7, 13, 99, 2024, 17, 88, 55, 101, 314]
 TEST_SIZE = 0.20
 N_FOLDS   = 5
@@ -428,7 +428,7 @@ print(f"  FOV kurtosis    : {_pd_eda.Series(y_all).kurt():.3f}")
 print(f"  Sample types    : {len(smp_uniq)} types | min={min(smp_cnts)} | max={max(smp_cnts)}")
 
 
-# ════ §3 YARDIMCI FONKSIYONLAR ════════════════════════════════════
+# ════ §3 HELPER FUNCTIONS ═════════════════════════════════════════
 def compute_metrics(yt,yp):
     return dict(R2=float(r2_score(yt,yp)),
                 RMSE=float(np.sqrt(mean_squared_error(yt,yp))),
@@ -813,7 +813,7 @@ else:
 print(f"\n  ✔ {len(BEST_PARAMS)} models optimized: {list(BEST_PARAMS.keys())}")
 
 
-# ════ §6 HyPhysML ULTIMATE SINIFI ═════════════════════════════════
+# ════ §6 HyPhysML CLASS ═══════════════════════════════════════════
 class HyPhysML(BaseEstimator,RegressorMixin):
     """
     HyPhysML ULTIMATE
@@ -1245,7 +1245,7 @@ plt.savefig(_lc_path, dpi=150, bbox_inches="tight"); plt.show()
 print(f"  Final validation R²: {_lc_val_mean[-1]:.4f} ± {_lc_val_std[-1]:.4f}")
 print(f"  [OK] {_lc_path}")
 
-# ── 9.5-E  Excel'e kaydet ────────────────────────────────────────────────────
+# ── 9.5-E  Save to Excel ─────────────────────────────────────────────────────
 _res_summary = pd.DataFrame({
     "Metric": ["Residual Mean (kV)", "Residual Std (kV)", "Shapiro-Wilk W", "Shapiro-Wilk p",
                "LC Val R2 (full data)", "LC Val R2 std"],
@@ -1511,7 +1511,7 @@ try:
 except Exception as e:
     print(f"  ICE skipped: {e}")
 
-# ════ §15 EXCEL RAPORU ════════════════════════════════════════════
+# ════ §15 EXCEL REPORT ════════════════════════════════════════════
 section("§15  Excel Report")
 def fmt(m,s,d=4): return f"{m:.{d}f} ± {s:.{d}f}"
 with pd.ExcelWriter(os.path.join(OUT_DIR,"results_Q1_ULTIMATE.xlsx"),engine="openpyxl") as writer:
@@ -1526,11 +1526,7 @@ with pd.ExcelWriter(os.path.join(OUT_DIR,"results_Q1_ULTIMATE.xlsx"),engine="ope
     pd.DataFrame(wil_rows).to_excel(writer,sheet_name="Table2_StatTests",index=False)
     pd.DataFrame(noise_rows).to_excel(writer,sheet_name="Table3_Sensitivity",index=False)
     pd.DataFrame([{"Feature":k,"β":round(v,4)} for k,v in sorted(coefs_.items(),key=lambda x:abs(x[1]),reverse=True)]).to_excel(writer,sheet_name="Table4_PhysicsCoefs",index=False)
-    pd.DataFrame({"Reference":["This study","This study (HyPhysML)","[Lit-1]","[Lit-2]","[Lit-3]"],
-        "Method":[BEST,"HyPhysML ULTIMATE","FILL IN","FILL IN","FILL IN"],
-        "R²":[f"{agg.loc[BEST,'R2_mean']:.4f}",f"{m_hyp42['R2']:.4f}","FILL IN","FILL IN","FILL IN"],
-        "RMSE":[f"{agg.loc[BEST,'RMSE_mean']:.4f}",f"{m_hyp42['RMSE']:.4f}","FILL IN","FILL IN","FILL IN"]
-    }).to_excel(writer,sheet_name="Table5_LitTemplate",index=False)
+
     res_df.to_excel(writer,sheet_name="Raw_AllModels",index=False)
     _cv_df.to_excel(writer,sheet_name="Table6_CV_Scores",index=False)
     _tr_agg.to_excel(writer,sheet_name="Table7_TrainTestR2")
