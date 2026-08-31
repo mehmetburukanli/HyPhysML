@@ -6,7 +6,7 @@
 
 # ========================================================================
 # [MARKDOWN CELL 0]
-# # HyPhysML ULTIMATE — Fizik-Bilgili Hibrit ML
+# HyPhysML ULTIMATE
 # **Comprehensive EDA + 14-Model Benchmark + Statistical Analysis**
 # 
 # ## Steps
@@ -1534,7 +1534,7 @@ with pd.ExcelWriter(os.path.join(OUT_DIR,"results_Q1_ULTIMATE.xlsx"),engine="ope
     _vif_data.to_excel(writer,sheet_name="Table9_VIF",index=False)
 print("  ✔ results_Q1_ULTIMATE.xlsx")
 
-# ── BEST_PARAMS → Excel (Tablo 7 — Hiperparametre Tekrarlanabilirlik) ─────────
+# ── BEST_PARAMS → Excel (Table 7 — Hyperparameter reproducibility) ───────────
 # 7 base learners + Ridge meta-learner used in HyPhysML stacking
 _HYPHY_LEARNERS = ["XGBoost","LightGBM","GBR","HistGBR","RF","Extra Trees","KNN","Ridge"]
 _SKIP_PARAMS    = {"random_state","verbosity","n_jobs","verbose","tree_method","nthread"}
