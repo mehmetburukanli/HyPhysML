@@ -2,7 +2,7 @@
 
 Reference implementation for:
 
-> Burukanli, M. *HyPhysML: physics-informed hybrid machine learning for predicting contamination-induced flashover voltage of outdoor insulators.* Submitted to *Scientific Reports*.
+> Burukanli, M. *Physics-informed hybrid machine learning predicts contamination-induced flashover voltage of outdoor insulators* Submitted to *Scientific Reports*.
 
 The script reproduces every quantitative result, figure and table reported in the manuscript and its Supplementary Information: the 14-model benchmark over 10 random seeds, the Optuna-TPE hyperparameter search, the out-of-fold stacking ensemble, the Obenaus physics-validation layer, the statistical tests, SHAP and permutation importance, the noise-sensitivity study and the ablation analysis.
 
