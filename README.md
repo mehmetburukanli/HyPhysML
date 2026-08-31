@@ -91,7 +91,7 @@ The physics layer validates six sign constraints on the Obenaus log-linear coeff
 
 If you use this code, please cite the manuscript above and the dataset:
 
-> Ahani, E. Flashover voltage dataset for polymeric insulators under environmental conditions. *Mendeley Data* <https://doi.org/10.17632/8r7k4cgkg8.1> (2026).
+> Science Incorpration, Larzeh Paydar Azerbaijan (2026), "Flashover Voltage Dataset for Polymeric Insulators under Environmental Conditions", Mendeley Data, V1, doi: 10.17632/8r7k4cgkg8.1
 
 ## License
 
