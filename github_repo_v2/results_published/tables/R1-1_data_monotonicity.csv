@@ -1,6 +1,0 @@
-Factor,n_adjacent_steps,pct_steps_FOV_decreases,pct_cells_strictly_monotone,median_step_kV
-SDD,4992,99.62,98.86,-10.524
-RH,4992,97.96,93.99,-9.543
-Aging,4992,84.13,52.76,-6.926
-J,5120,95.53,82.89,-5.704
-K,5120,65.74,2.19,-1.412
