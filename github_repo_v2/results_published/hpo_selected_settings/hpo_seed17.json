@@ -1,0 +1,126 @@
+{
+ "_n_trials": 200,
+ "XGBoost": {
+  "params": {
+   "n_estimators": 1550,
+   "learning_rate": 0.01653166923610472,
+   "max_depth": 4,
+   "subsample": 0.8348497091783043,
+   "colsample_bytree": 0.5044419517076264,
+   "min_child_weight": 11,
+   "gamma": 0.4235858501046662,
+   "reg_lambda": 0.1406673452232218,
+   "reg_alpha": 1.9243441990001695
+  },
+  "cv_r2": 0.9885483568531972,
+  "minutes": 72.21
+ },
+ "LightGBM": {
+  "params": {
+   "n_estimators": 1115,
+   "learning_rate": 0.0336762056148162,
+   "num_leaves": 39,
+   "subsample": 0.6025386586598849,
+   "colsample_bytree": 0.5718041627840524,
+   "min_child_samples": 97,
+   "reg_lambda": 6.486408807093116,
+   "reg_alpha": 0.6383607010825398
+  },
+  "cv_r2": 0.9881156328935872,
+  "minutes": 6.99
+ },
+ "GBR": {
+  "params": {
+   "n_estimators": 1447,
+   "learning_rate": 0.030338857078291228,
+   "max_depth": 3,
+   "subsample": 0.7184333467465094,
+   "min_samples_leaf": 9,
+   "max_features": 0.41894216584154753
+  },
+  "cv_r2": 0.9884977469390515,
+  "minutes": 22.57
+ },
+ "HistGBR": {
+  "params": {
+   "max_iter": 1358,
+   "learning_rate": 0.05762523206810251,
+   "max_depth": 3,
+   "l2_regularization": 0.08355198891024505,
+   "min_samples_leaf": 50,
+   "max_leaf_nodes": 230
+  },
+  "cv_r2": 0.9883254080040033,
+  "minutes": 10.04
+ },
+ "RF": {
+  "params": {
+   "n_estimators": 499,
+   "min_samples_leaf": 1,
+   "max_features": 0.4711165558893573,
+   "min_samples_split": 3
+  },
+  "cv_r2": 0.9851049721871028,
+  "minutes": 32.6
+ },
+ "Extra Trees": {
+  "params": {
+   "n_estimators": 721,
+   "min_samples_leaf": 1,
+   "max_features": 0.8992979395799169,
+   "min_samples_split": 4
+  },
+  "cv_r2": 0.9837627021816339,
+  "minutes": 38.97
+ },
+ "Ridge": {
+  "params": {
+   "alpha": 0.001000068561731601
+  },
+  "cv_r2": 0.9550028641721717,
+  "minutes": 0.49
+ },
+ "Decision Tree": {
+  "params": {
+   "max_depth": 17,
+   "min_samples_leaf": 2,
+   "min_samples_split": 3,
+   "max_features": 0.5
+  },
+  "cv_r2": 0.970814682431697,
+  "minutes": 0.51
+ },
+ "KNN": {
+  "params": {
+   "n_neighbors": 6,
+   "weights": "distance",
+   "p": 1
+  },
+  "cv_r2": 0.9676581605834327,
+  "minutes": 1.01
+ },
+ "SVR": {
+  "params": {
+   "C": 477.8128684509864,
+   "gamma": "auto",
+   "epsilon": 0.9875143125134568
+  },
+  "cv_r2": 0.9882964683899675,
+  "minutes": 30.34
+ },
+ "MLP": {
+  "params": {
+   "hidden_layer_sizes": [
+    256,
+    128,
+    64,
+    32
+   ],
+   "alpha": 2.169236935551231e-05,
+   "learning_rate_init": 0.004329141865052849,
+   "batch_size": 128
+  },
+  "cv_r2": 0.9877772775022446,
+  "minutes": 35.15
+ }
+}

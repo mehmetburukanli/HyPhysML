@@ -1,0 +1,521 @@
+Model,Hyperparameter,Seed,Value,Search space,Inner CV R2
+XGBoost,n_estimators,42,1866,"int [300, 2000]",0.9883159530702865
+XGBoost,learning_rate,42,0.012631860083634637,"float [0.005, 0.15] log",0.9883159530702865
+XGBoost,max_depth,42,4,"int [4, 10]",0.9883159530702865
+XGBoost,subsample,42,0.7053587050782623,"float [0.6, 1.0]",0.9883159530702865
+XGBoost,colsample_bytree,42,0.5024040798282718,"float [0.5, 1.0]",0.9883159530702865
+XGBoost,min_child_weight,42,16,"int [1, 20]",0.9883159530702865
+XGBoost,gamma,42,0.13691546647202285,"float [0, 0.5]",0.9883159530702865
+XGBoost,reg_lambda,42,1.484115869197676,"float [0.01, 10] log",0.9883159530702865
+XGBoost,reg_alpha,42,0.6575960678898942,"float [0, 2]",0.9883159530702865
+LightGBM,n_estimators,42,1110,"int [300, 2000]",0.9879974619212692
+LightGBM,learning_rate,42,0.02970351988070694,"float [0.005, 0.15] log",0.9879974619212692
+LightGBM,num_leaves,42,83,"int [31, 255]",0.9879974619212692
+LightGBM,subsample,42,0.8958225913457278,"float [0.6, 1.0]",0.9879974619212692
+LightGBM,colsample_bytree,42,0.5271642724415067,"float [0.5, 1.0]",0.9879974619212692
+LightGBM,min_child_samples,42,95,"int [5, 100]",0.9879974619212692
+LightGBM,reg_lambda,42,2.880777929521901,"float [0.01, 10] log",0.9879974619212692
+LightGBM,reg_alpha,42,0.051268637660452025,"float [0, 2]",0.9879974619212692
+GBR,n_estimators,42,1422,"int [300, 1500]",0.9883396714088002
+GBR,learning_rate,42,0.026977860092398526,"float [0.005, 0.1] log",0.9883396714088002
+GBR,max_depth,42,3,"int [3, 7]",0.9883396714088002
+GBR,subsample,42,0.6712531155486609,"float [0.6, 1.0]",0.9883396714088002
+GBR,min_samples_leaf,42,5,"int [1, 10]",0.9883396714088002
+GBR,max_features,42,0.49572730986426233,"float [0.4, 1.0]",0.9883396714088002
+HistGBR,max_iter,42,1338,"int [300, 1500]",0.9880770023987251
+HistGBR,learning_rate,42,0.058359441252433336,"float [0.005, 0.1] log",0.9880770023987251
+HistGBR,max_depth,42,3,"int [3, 10]",0.9880770023987251
+HistGBR,l2_regularization,42,0.17905272278229775,"float [0, 1]",0.9880770023987251
+HistGBR,min_samples_leaf,42,41,"int [5, 50]",0.9880770023987251
+HistGBR,max_leaf_nodes,42,248,"int [20, 255]",0.9880770023987251
+RF,n_estimators,42,425,"int [200, 800]",0.9846695269401934
+RF,min_samples_leaf,42,1,"int [1, 10]",0.9846695269401934
+RF,max_features,42,0.38499244137560074,"float [0.3, 0.9]",0.9846695269401934
+RF,min_samples_split,42,3,"int [2, 10]",0.9846695269401934
+Extra Trees,n_estimators,42,695,"int [200, 800]",0.9834453798971461
+Extra Trees,min_samples_leaf,42,1,"int [1, 10]",0.9834453798971461
+Extra Trees,max_features,42,0.8917176329712204,"float [0.3, 0.9]",0.9834453798971461
+Extra Trees,min_samples_split,42,5,"int [2, 10]",0.9834453798971461
+Ridge,alpha,42,0.0010001957329516197,"float [0.001, 100] log",0.9542113569247379
+Decision Tree,max_depth,42,15,"int [3, 20]",0.9705602323802903
+Decision Tree,min_samples_leaf,42,2,"int [1, 20]",0.9705602323802903
+Decision Tree,min_samples_split,42,5,"int [2, 20]",0.9705602323802903
+Decision Tree,max_features,42,0.5,"{sqrt, log2, None, 0.5, 0.7, 0.9}",0.9705602323802903
+KNN,n_neighbors,42,7,"int [2, 20]",0.9668511671526332
+KNN,weights,42,distance,"{uniform, distance}",0.9668511671526332
+KNN,p,42,1,"{1, 2}",0.9668511671526332
+SVR,C,42,128.29248559819334,"float [0.1, 1000] log",0.987945543717138
+SVR,gamma,42,auto,"{scale, auto}",0.987945543717138
+SVR,epsilon,42,0.9578967300628453,"float [0.001, 1] log",0.987945543717138
+MLP,hidden_layer_sizes,42,"[256, 128, 64, 32]","{(64, 32), (128, 64), (128, 64, 32), (256, 128, 64), (256, 128, 64, 32), (128, 64, 32, 16)}",0.9873789455648222
+MLP,alpha,42,0.0037830918089551847,"float [1e-5, 1e-2] log",0.9873789455648222
+MLP,learning_rate_init,42,0.0021709498294498588,"float [1e-4, 1e-2] log",0.9873789455648222
+MLP,batch_size,42,128,"{32, 64, 128, auto}",0.9873789455648222
+XGBoost,n_estimators,7,1338,"int [300, 2000]",0.9879708980185502
+XGBoost,learning_rate,7,0.020184166163508654,"float [0.005, 0.15] log",0.9879708980185502
+XGBoost,max_depth,7,4,"int [4, 10]",0.9879708980185502
+XGBoost,subsample,7,0.8231432078303234,"float [0.6, 1.0]",0.9879708980185502
+XGBoost,colsample_bytree,7,0.8222766210713256,"float [0.5, 1.0]",0.9879708980185502
+XGBoost,min_child_weight,7,17,"int [1, 20]",0.9879708980185502
+XGBoost,gamma,7,0.15750644807705863,"float [0, 0.5]",0.9879708980185502
+XGBoost,reg_lambda,7,1.804572525679093,"float [0.01, 10] log",0.9879708980185502
+XGBoost,reg_alpha,7,0.07768934680659448,"float [0, 2]",0.9879708980185502
+LightGBM,n_estimators,7,1141,"int [300, 2000]",0.987394517911356
+LightGBM,learning_rate,7,0.021659342062408687,"float [0.005, 0.15] log",0.987394517911356
+LightGBM,num_leaves,7,105,"int [31, 255]",0.987394517911356
+LightGBM,subsample,7,0.8236370850971537,"float [0.6, 1.0]",0.987394517911356
+LightGBM,colsample_bytree,7,0.5199539216481289,"float [0.5, 1.0]",0.987394517911356
+LightGBM,min_child_samples,7,69,"int [5, 100]",0.987394517911356
+LightGBM,reg_lambda,7,0.7280782451779887,"float [0.01, 10] log",0.987394517911356
+LightGBM,reg_alpha,7,1.9890756790553914,"float [0, 2]",0.987394517911356
+GBR,n_estimators,7,1414,"int [300, 1500]",0.9879918782512384
+GBR,learning_rate,7,0.005852778592466769,"float [0.005, 0.1] log",0.9879918782512384
+GBR,max_depth,7,6,"int [3, 7]",0.9879918782512384
+GBR,subsample,7,0.6445940334099518,"float [0.6, 1.0]",0.9879918782512384
+GBR,min_samples_leaf,7,4,"int [1, 10]",0.9879918782512384
+GBR,max_features,7,0.41807147494018804,"float [0.4, 1.0]",0.9879918782512384
+HistGBR,max_iter,7,1442,"int [300, 1500]",0.9879420751486745
+HistGBR,learning_rate,7,0.03184643020396882,"float [0.005, 0.1] log",0.9879420751486745
+HistGBR,max_depth,7,3,"int [3, 10]",0.9879420751486745
+HistGBR,l2_regularization,7,0.9636410459572503,"float [0, 1]",0.9879420751486745
+HistGBR,min_samples_leaf,7,23,"int [5, 50]",0.9879420751486745
+HistGBR,max_leaf_nodes,7,232,"int [20, 255]",0.9879420751486745
+RF,n_estimators,7,703,"int [200, 800]",0.9841495395537327
+RF,min_samples_leaf,7,1,"int [1, 10]",0.9841495395537327
+RF,max_features,7,0.4531869115696281,"float [0.3, 0.9]",0.9841495395537327
+RF,min_samples_split,7,3,"int [2, 10]",0.9841495395537327
+Extra Trees,n_estimators,7,623,"int [200, 800]",0.9827064353391084
+Extra Trees,min_samples_leaf,7,1,"int [1, 10]",0.9827064353391084
+Extra Trees,max_features,7,0.8891814508605241,"float [0.3, 0.9]",0.9827064353391084
+Extra Trees,min_samples_split,7,5,"int [2, 10]",0.9827064353391084
+Ridge,alpha,7,0.0010001099725033293,"float [0.001, 100] log",0.9542799545099185
+Decision Tree,max_depth,7,17,"int [3, 20]",0.9695544819988919
+Decision Tree,min_samples_leaf,7,2,"int [1, 20]",0.9695544819988919
+Decision Tree,min_samples_split,7,4,"int [2, 20]",0.9695544819988919
+Decision Tree,max_features,7,0.9,"{sqrt, log2, None, 0.5, 0.7, 0.9}",0.9695544819988919
+KNN,n_neighbors,7,8,"int [2, 20]",0.9645585657747586
+KNN,weights,7,distance,"{uniform, distance}",0.9645585657747586
+KNN,p,7,1,"{1, 2}",0.9645585657747586
+SVR,C,7,111.10686931698217,"float [0.1, 1000] log",0.9876961287604088
+SVR,gamma,7,auto,"{scale, auto}",0.9876961287604088
+SVR,epsilon,7,0.9891019167951798,"float [0.001, 1] log",0.9876961287604088
+MLP,hidden_layer_sizes,7,"[256, 128, 64]","{(64, 32), (128, 64), (128, 64, 32), (256, 128, 64), (256, 128, 64, 32), (128, 64, 32, 16)}",0.9873178324127171
+MLP,alpha,7,0.0019395872307013272,"float [1e-5, 1e-2] log",0.9873178324127171
+MLP,learning_rate_init,7,0.00011439844637770234,"float [1e-4, 1e-2] log",0.9873178324127171
+MLP,batch_size,7,32,"{32, 64, 128, auto}",0.9873178324127171
+XGBoost,n_estimators,13,1882,"int [300, 2000]",0.9885064685223701
+XGBoost,learning_rate,13,0.012541139168001121,"float [0.005, 0.15] log",0.9885064685223701
+XGBoost,max_depth,13,4,"int [4, 10]",0.9885064685223701
+XGBoost,subsample,13,0.6297742725911781,"float [0.6, 1.0]",0.9885064685223701
+XGBoost,colsample_bytree,13,0.5164884694560365,"float [0.5, 1.0]",0.9885064685223701
+XGBoost,min_child_weight,13,6,"int [1, 20]",0.9885064685223701
+XGBoost,gamma,13,0.3384437388817076,"float [0, 0.5]",0.9885064685223701
+XGBoost,reg_lambda,13,0.029117734751401038,"float [0.01, 10] log",0.9885064685223701
+XGBoost,reg_alpha,13,0.06800760168922543,"float [0, 2]",0.9885064685223701
+LightGBM,n_estimators,13,900,"int [300, 2000]",0.988050522846984
+LightGBM,learning_rate,13,0.018505806309546357,"float [0.005, 0.15] log",0.988050522846984
+LightGBM,num_leaves,13,32,"int [31, 255]",0.988050522846984
+LightGBM,subsample,13,0.6627159086846927,"float [0.6, 1.0]",0.988050522846984
+LightGBM,colsample_bytree,13,0.799049195772752,"float [0.5, 1.0]",0.988050522846984
+LightGBM,min_child_samples,13,6,"int [5, 100]",0.988050522846984
+LightGBM,reg_lambda,13,0.08317642742191267,"float [0.01, 10] log",0.988050522846984
+LightGBM,reg_alpha,13,1.868589198636118,"float [0, 2]",0.988050522846984
+GBR,n_estimators,13,1371,"int [300, 1500]",0.9884893922936981
+GBR,learning_rate,13,0.014110844497037998,"float [0.005, 0.1] log",0.9884893922936981
+GBR,max_depth,13,4,"int [3, 7]",0.9884893922936981
+GBR,subsample,13,0.7846019583990311,"float [0.6, 1.0]",0.9884893922936981
+GBR,min_samples_leaf,13,3,"int [1, 10]",0.9884893922936981
+GBR,max_features,13,0.40773466816947934,"float [0.4, 1.0]",0.9884893922936981
+HistGBR,max_iter,13,1191,"int [300, 1500]",0.9882675226221085
+HistGBR,learning_rate,13,0.047624424999617554,"float [0.005, 0.1] log",0.9882675226221085
+HistGBR,max_depth,13,3,"int [3, 10]",0.9882675226221085
+HistGBR,l2_regularization,13,0.19107917832717025,"float [0, 1]",0.9882675226221085
+HistGBR,min_samples_leaf,13,19,"int [5, 50]",0.9882675226221085
+HistGBR,max_leaf_nodes,13,58,"int [20, 255]",0.9882675226221085
+RF,n_estimators,13,561,"int [200, 800]",0.9847963166144161
+RF,min_samples_leaf,13,1,"int [1, 10]",0.9847963166144161
+RF,max_features,13,0.5486034676281905,"float [0.3, 0.9]",0.9847963166144161
+RF,min_samples_split,13,3,"int [2, 10]",0.9847963166144161
+Extra Trees,n_estimators,13,412,"int [200, 800]",0.9837094250571461
+Extra Trees,min_samples_leaf,13,1,"int [1, 10]",0.9837094250571461
+Extra Trees,max_features,13,0.8879368782578496,"float [0.3, 0.9]",0.9837094250571461
+Extra Trees,min_samples_split,13,4,"int [2, 10]",0.9837094250571461
+Ridge,alpha,13,0.0010001288790175138,"float [0.001, 100] log",0.9542224911483894
+Decision Tree,max_depth,13,13,"int [3, 20]",0.9707351221524378
+Decision Tree,min_samples_leaf,13,1,"int [1, 20]",0.9707351221524378
+Decision Tree,min_samples_split,13,6,"int [2, 20]",0.9707351221524378
+Decision Tree,max_features,13,0.7,"{sqrt, log2, None, 0.5, 0.7, 0.9}",0.9707351221524378
+KNN,n_neighbors,13,7,"int [2, 20]",0.9659528635588274
+KNN,weights,13,distance,"{uniform, distance}",0.9659528635588274
+KNN,p,13,1,"{1, 2}",0.9659528635588274
+SVR,C,13,192.24182305906993,"float [0.1, 1000] log",0.9879468825340716
+SVR,gamma,13,auto,"{scale, auto}",0.9879468825340716
+SVR,epsilon,13,0.9996999237837978,"float [0.001, 1] log",0.9879468825340716
+MLP,hidden_layer_sizes,13,"[256, 128, 64, 32]","{(64, 32), (128, 64), (128, 64, 32), (256, 128, 64), (256, 128, 64, 32), (128, 64, 32, 16)}",0.9874545636243255
+MLP,alpha,13,0.00012079990744099906,"float [1e-5, 1e-2] log",0.9874545636243255
+MLP,learning_rate_init,13,0.0002481412599996451,"float [1e-4, 1e-2] log",0.9874545636243255
+MLP,batch_size,13,64,"{32, 64, 128, auto}",0.9874545636243255
+XGBoost,n_estimators,99,1066,"int [300, 2000]",0.9880963715343279
+XGBoost,learning_rate,99,0.026328060272745563,"float [0.005, 0.15] log",0.9880963715343279
+XGBoost,max_depth,99,4,"int [4, 10]",0.9880963715343279
+XGBoost,subsample,99,0.855782535957909,"float [0.6, 1.0]",0.9880963715343279
+XGBoost,colsample_bytree,99,0.5989482054446859,"float [0.5, 1.0]",0.9880963715343279
+XGBoost,min_child_weight,99,5,"int [1, 20]",0.9880963715343279
+XGBoost,gamma,99,0.4947541031008148,"float [0, 0.5]",0.9880963715343279
+XGBoost,reg_lambda,99,0.24013828409605348,"float [0.01, 10] log",0.9880963715343279
+XGBoost,reg_alpha,99,0.5688186634046031,"float [0, 2]",0.9880963715343279
+LightGBM,n_estimators,99,1985,"int [300, 2000]",0.9877284302985716
+LightGBM,learning_rate,99,0.01708072289879643,"float [0.005, 0.15] log",0.9877284302985716
+LightGBM,num_leaves,99,183,"int [31, 255]",0.9877284302985716
+LightGBM,subsample,99,0.6521974842701163,"float [0.6, 1.0]",0.9877284302985716
+LightGBM,colsample_bytree,99,0.5047517094256444,"float [0.5, 1.0]",0.9877284302985716
+LightGBM,min_child_samples,99,95,"int [5, 100]",0.9877284302985716
+LightGBM,reg_lambda,99,0.20583089439322783,"float [0.01, 10] log",0.9877284302985716
+LightGBM,reg_alpha,99,0.18105644783163774,"float [0, 2]",0.9877284302985716
+GBR,n_estimators,99,1442,"int [300, 1500]",0.9881808861148474
+GBR,learning_rate,99,0.010524325740701944,"float [0.005, 0.1] log",0.9881808861148474
+GBR,max_depth,99,5,"int [3, 7]",0.9881808861148474
+GBR,subsample,99,0.6117130660204079,"float [0.6, 1.0]",0.9881808861148474
+GBR,min_samples_leaf,99,9,"int [1, 10]",0.9881808861148474
+GBR,max_features,99,0.46171294598430807,"float [0.4, 1.0]",0.9881808861148474
+HistGBR,max_iter,99,1393,"int [300, 1500]",0.9878989854218612
+HistGBR,learning_rate,99,0.04692242778889718,"float [0.005, 0.1] log",0.9878989854218612
+HistGBR,max_depth,99,3,"int [3, 10]",0.9878989854218612
+HistGBR,l2_regularization,99,0.8937915273529214,"float [0, 1]",0.9878989854218612
+HistGBR,min_samples_leaf,99,20,"int [5, 50]",0.9878989854218612
+HistGBR,max_leaf_nodes,99,90,"int [20, 255]",0.9878989854218612
+RF,n_estimators,99,677,"int [200, 800]",0.9845749516088367
+RF,min_samples_leaf,99,1,"int [1, 10]",0.9845749516088367
+RF,max_features,99,0.47661878297532123,"float [0.3, 0.9]",0.9845749516088367
+RF,min_samples_split,99,3,"int [2, 10]",0.9845749516088367
+Extra Trees,n_estimators,99,681,"int [200, 800]",0.9831305818165517
+Extra Trees,min_samples_leaf,99,1,"int [1, 10]",0.9831305818165517
+Extra Trees,max_features,99,0.8906414317105859,"float [0.3, 0.9]",0.9831305818165517
+Extra Trees,min_samples_split,99,4,"int [2, 10]",0.9831305818165517
+Ridge,alpha,99,0.0010001781664399528,"float [0.001, 100] log",0.9540838512329269
+Decision Tree,max_depth,99,16,"int [3, 20]",0.9698402427187801
+Decision Tree,min_samples_leaf,99,1,"int [1, 20]",0.9698402427187801
+Decision Tree,min_samples_split,99,4,"int [2, 20]",0.9698402427187801
+Decision Tree,max_features,99,0.5,"{sqrt, log2, None, 0.5, 0.7, 0.9}",0.9698402427187801
+KNN,n_neighbors,99,7,"int [2, 20]",0.9637015979618818
+KNN,weights,99,distance,"{uniform, distance}",0.9637015979618818
+KNN,p,99,1,"{1, 2}",0.9637015979618818
+SVR,C,99,247.48418284755272,"float [0.1, 1000] log",0.9878482998039594
+SVR,gamma,99,auto,"{scale, auto}",0.9878482998039594
+SVR,epsilon,99,0.8101206285744368,"float [0.001, 1] log",0.9878482998039594
+MLP,hidden_layer_sizes,99,"[256, 128, 64]","{(64, 32), (128, 64), (128, 64, 32), (256, 128, 64), (256, 128, 64, 32), (128, 64, 32, 16)}",0.9873577526796602
+MLP,alpha,99,0.005629484858518123,"float [1e-5, 1e-2] log",0.9873577526796602
+MLP,learning_rate_init,99,0.0022895297716912684,"float [1e-4, 1e-2] log",0.9873577526796602
+MLP,batch_size,99,128,"{32, 64, 128, auto}",0.9873577526796602
+XGBoost,n_estimators,2024,1541,"int [300, 2000]",0.9883726039244893
+XGBoost,learning_rate,2024,0.009488484791462071,"float [0.005, 0.15] log",0.9883726039244893
+XGBoost,max_depth,2024,5,"int [4, 10]",0.9883726039244893
+XGBoost,subsample,2024,0.643308603247876,"float [0.6, 1.0]",0.9883726039244893
+XGBoost,colsample_bytree,2024,0.5069609726029664,"float [0.5, 1.0]",0.9883726039244893
+XGBoost,min_child_weight,2024,7,"int [1, 20]",0.9883726039244893
+XGBoost,gamma,2024,0.3553914368060038,"float [0, 0.5]",0.9883726039244893
+XGBoost,reg_lambda,2024,0.784744718827161,"float [0.01, 10] log",0.9883726039244893
+XGBoost,reg_alpha,2024,0.20189498359241423,"float [0, 2]",0.9883726039244893
+LightGBM,n_estimators,2024,1703,"int [300, 2000]",0.9877503206969948
+LightGBM,learning_rate,2024,0.020444672097847175,"float [0.005, 0.15] log",0.9877503206969948
+LightGBM,num_leaves,2024,38,"int [31, 255]",0.9877503206969948
+LightGBM,subsample,2024,0.8938122320414241,"float [0.6, 1.0]",0.9877503206969948
+LightGBM,colsample_bytree,2024,0.6000395174651708,"float [0.5, 1.0]",0.9877503206969948
+LightGBM,min_child_samples,2024,85,"int [5, 100]",0.9877503206969948
+LightGBM,reg_lambda,2024,9.677900217799072,"float [0.01, 10] log",0.9877503206969948
+LightGBM,reg_alpha,2024,0.2861886779419774,"float [0, 2]",0.9877503206969948
+GBR,n_estimators,2024,1355,"int [300, 1500]",0.988425134845434
+GBR,learning_rate,2024,0.025291688511716065,"float [0.005, 0.1] log",0.988425134845434
+GBR,max_depth,2024,3,"int [3, 7]",0.988425134845434
+GBR,subsample,2024,0.6004092095607422,"float [0.6, 1.0]",0.988425134845434
+GBR,min_samples_leaf,2024,3,"int [1, 10]",0.988425134845434
+GBR,max_features,2024,0.4685358459187849,"float [0.4, 1.0]",0.988425134845434
+HistGBR,max_iter,2024,1497,"int [300, 1500]",0.9882274636282921
+HistGBR,learning_rate,2024,0.035293873468778006,"float [0.005, 0.1] log",0.9882274636282921
+HistGBR,max_depth,2024,3,"int [3, 10]",0.9882274636282921
+HistGBR,l2_regularization,2024,0.9492631480833023,"float [0, 1]",0.9882274636282921
+HistGBR,min_samples_leaf,2024,14,"int [5, 50]",0.9882274636282921
+HistGBR,max_leaf_nodes,2024,102,"int [20, 255]",0.9882274636282921
+RF,n_estimators,2024,758,"int [200, 800]",0.9847919075041995
+RF,min_samples_leaf,2024,1,"int [1, 10]",0.9847919075041995
+RF,max_features,2024,0.41482483764323264,"float [0.3, 0.9]",0.9847919075041995
+RF,min_samples_split,2024,3,"int [2, 10]",0.9847919075041995
+Extra Trees,n_estimators,2024,563,"int [200, 800]",0.9834137766320614
+Extra Trees,min_samples_leaf,2024,1,"int [1, 10]",0.9834137766320614
+Extra Trees,max_features,2024,0.8892001466214017,"float [0.3, 0.9]",0.9834137766320614
+Extra Trees,min_samples_split,2024,4,"int [2, 10]",0.9834137766320614
+Ridge,alpha,2024,0.0010000194969283986,"float [0.001, 100] log",0.9539926960077467
+Decision Tree,max_depth,2024,19,"int [3, 20]",0.970631487273919
+Decision Tree,min_samples_leaf,2024,1,"int [1, 20]",0.970631487273919
+Decision Tree,min_samples_split,2024,6,"int [2, 20]",0.970631487273919
+Decision Tree,max_features,2024,0.7,"{sqrt, log2, None, 0.5, 0.7, 0.9}",0.970631487273919
+KNN,n_neighbors,2024,7,"int [2, 20]",0.966784944507704
+KNN,weights,2024,distance,"{uniform, distance}",0.966784944507704
+KNN,p,2024,1,"{1, 2}",0.966784944507704
+SVR,C,2024,169.97204712967826,"float [0.1, 1000] log",0.9879082390338116
+SVR,gamma,2024,auto,"{scale, auto}",0.9879082390338116
+SVR,epsilon,2024,0.8902126930383267,"float [0.001, 1] log",0.9879082390338116
+MLP,hidden_layer_sizes,2024,"[256, 128, 64]","{(64, 32), (128, 64), (128, 64, 32), (256, 128, 64), (256, 128, 64, 32), (128, 64, 32, 16)}",0.9875396420189656
+MLP,alpha,2024,0.00641828822342497,"float [1e-5, 1e-2] log",0.9875396420189656
+MLP,learning_rate_init,2024,0.001448882000697686,"float [1e-4, 1e-2] log",0.9875396420189656
+MLP,batch_size,2024,auto,"{32, 64, 128, auto}",0.9875396420189656
+XGBoost,n_estimators,17,1550,"int [300, 2000]",0.9885483568531972
+XGBoost,learning_rate,17,0.01653166923610472,"float [0.005, 0.15] log",0.9885483568531972
+XGBoost,max_depth,17,4,"int [4, 10]",0.9885483568531972
+XGBoost,subsample,17,0.8348497091783043,"float [0.6, 1.0]",0.9885483568531972
+XGBoost,colsample_bytree,17,0.5044419517076264,"float [0.5, 1.0]",0.9885483568531972
+XGBoost,min_child_weight,17,11,"int [1, 20]",0.9885483568531972
+XGBoost,gamma,17,0.4235858501046662,"float [0, 0.5]",0.9885483568531972
+XGBoost,reg_lambda,17,0.1406673452232218,"float [0.01, 10] log",0.9885483568531972
+XGBoost,reg_alpha,17,1.9243441990001695,"float [0, 2]",0.9885483568531972
+LightGBM,n_estimators,17,1115,"int [300, 2000]",0.9881156328935872
+LightGBM,learning_rate,17,0.0336762056148162,"float [0.005, 0.15] log",0.9881156328935872
+LightGBM,num_leaves,17,39,"int [31, 255]",0.9881156328935872
+LightGBM,subsample,17,0.6025386586598849,"float [0.6, 1.0]",0.9881156328935872
+LightGBM,colsample_bytree,17,0.5718041627840524,"float [0.5, 1.0]",0.9881156328935872
+LightGBM,min_child_samples,17,97,"int [5, 100]",0.9881156328935872
+LightGBM,reg_lambda,17,6.486408807093116,"float [0.01, 10] log",0.9881156328935872
+LightGBM,reg_alpha,17,0.6383607010825398,"float [0, 2]",0.9881156328935872
+GBR,n_estimators,17,1447,"int [300, 1500]",0.9884977469390515
+GBR,learning_rate,17,0.030338857078291228,"float [0.005, 0.1] log",0.9884977469390515
+GBR,max_depth,17,3,"int [3, 7]",0.9884977469390515
+GBR,subsample,17,0.7184333467465094,"float [0.6, 1.0]",0.9884977469390515
+GBR,min_samples_leaf,17,9,"int [1, 10]",0.9884977469390515
+GBR,max_features,17,0.41894216584154753,"float [0.4, 1.0]",0.9884977469390515
+HistGBR,max_iter,17,1358,"int [300, 1500]",0.9883254080040033
+HistGBR,learning_rate,17,0.05762523206810251,"float [0.005, 0.1] log",0.9883254080040033
+HistGBR,max_depth,17,3,"int [3, 10]",0.9883254080040033
+HistGBR,l2_regularization,17,0.08355198891024505,"float [0, 1]",0.9883254080040033
+HistGBR,min_samples_leaf,17,50,"int [5, 50]",0.9883254080040033
+HistGBR,max_leaf_nodes,17,230,"int [20, 255]",0.9883254080040033
+RF,n_estimators,17,499,"int [200, 800]",0.9851049721871028
+RF,min_samples_leaf,17,1,"int [1, 10]",0.9851049721871028
+RF,max_features,17,0.4711165558893573,"float [0.3, 0.9]",0.9851049721871028
+RF,min_samples_split,17,3,"int [2, 10]",0.9851049721871028
+Extra Trees,n_estimators,17,721,"int [200, 800]",0.9837627021816339
+Extra Trees,min_samples_leaf,17,1,"int [1, 10]",0.9837627021816339
+Extra Trees,max_features,17,0.8992979395799169,"float [0.3, 0.9]",0.9837627021816339
+Extra Trees,min_samples_split,17,4,"int [2, 10]",0.9837627021816339
+Ridge,alpha,17,0.001000068561731601,"float [0.001, 100] log",0.9550028641721717
+Decision Tree,max_depth,17,17,"int [3, 20]",0.970814682431697
+Decision Tree,min_samples_leaf,17,2,"int [1, 20]",0.970814682431697
+Decision Tree,min_samples_split,17,3,"int [2, 20]",0.970814682431697
+Decision Tree,max_features,17,0.5,"{sqrt, log2, None, 0.5, 0.7, 0.9}",0.970814682431697
+KNN,n_neighbors,17,6,"int [2, 20]",0.9676581605834327
+KNN,weights,17,distance,"{uniform, distance}",0.9676581605834327
+KNN,p,17,1,"{1, 2}",0.9676581605834327
+SVR,C,17,477.8128684509864,"float [0.1, 1000] log",0.9882964683899675
+SVR,gamma,17,auto,"{scale, auto}",0.9882964683899675
+SVR,epsilon,17,0.9875143125134568,"float [0.001, 1] log",0.9882964683899675
+MLP,hidden_layer_sizes,17,"[256, 128, 64, 32]","{(64, 32), (128, 64), (128, 64, 32), (256, 128, 64), (256, 128, 64, 32), (128, 64, 32, 16)}",0.9877772775022446
+MLP,alpha,17,2.169236935551231e-05,"float [1e-5, 1e-2] log",0.9877772775022446
+MLP,learning_rate_init,17,0.004329141865052849,"float [1e-4, 1e-2] log",0.9877772775022446
+MLP,batch_size,17,128,"{32, 64, 128, auto}",0.9877772775022446
+XGBoost,n_estimators,88,1582,"int [300, 2000]",0.9878125007299257
+XGBoost,learning_rate,88,0.015035739884206686,"float [0.005, 0.15] log",0.9878125007299257
+XGBoost,max_depth,88,4,"int [4, 10]",0.9878125007299257
+XGBoost,subsample,88,0.8365886249887434,"float [0.6, 1.0]",0.9878125007299257
+XGBoost,colsample_bytree,88,0.5588316583494954,"float [0.5, 1.0]",0.9878125007299257
+XGBoost,min_child_weight,88,14,"int [1, 20]",0.9878125007299257
+XGBoost,gamma,88,0.008199112015720735,"float [0, 0.5]",0.9878125007299257
+XGBoost,reg_lambda,88,0.039699611295994454,"float [0.01, 10] log",0.9878125007299257
+XGBoost,reg_alpha,88,1.6462996886305532,"float [0, 2]",0.9878125007299257
+LightGBM,n_estimators,88,1755,"int [300, 2000]",0.9874379365332313
+LightGBM,learning_rate,88,0.023073742863789288,"float [0.005, 0.15] log",0.9874379365332313
+LightGBM,num_leaves,88,92,"int [31, 255]",0.9874379365332313
+LightGBM,subsample,88,0.8251641298364142,"float [0.6, 1.0]",0.9874379365332313
+LightGBM,colsample_bytree,88,0.5689437771433148,"float [0.5, 1.0]",0.9874379365332313
+LightGBM,min_child_samples,88,95,"int [5, 100]",0.9874379365332313
+LightGBM,reg_lambda,88,0.2736131264472934,"float [0.01, 10] log",0.9874379365332313
+LightGBM,reg_alpha,88,1.3978799685880283,"float [0, 2]",0.9874379365332313
+GBR,n_estimators,88,1421,"int [300, 1500]",0.9878264791279555
+GBR,learning_rate,88,0.010924356234076385,"float [0.005, 0.1] log",0.9878264791279555
+GBR,max_depth,88,5,"int [3, 7]",0.9878264791279555
+GBR,subsample,88,0.6080170956027322,"float [0.6, 1.0]",0.9878264791279555
+GBR,min_samples_leaf,88,10,"int [1, 10]",0.9878264791279555
+GBR,max_features,88,0.4399780681093671,"float [0.4, 1.0]",0.9878264791279555
+HistGBR,max_iter,88,1464,"int [300, 1500]",0.9877238699456707
+HistGBR,learning_rate,88,0.033079074132330376,"float [0.005, 0.1] log",0.9877238699456707
+HistGBR,max_depth,88,3,"int [3, 10]",0.9877238699456707
+HistGBR,l2_regularization,88,0.28490606647316996,"float [0, 1]",0.9877238699456707
+HistGBR,min_samples_leaf,88,17,"int [5, 50]",0.9877238699456707
+HistGBR,max_leaf_nodes,88,81,"int [20, 255]",0.9877238699456707
+RF,n_estimators,88,776,"int [200, 800]",0.9840490508333299
+RF,min_samples_leaf,88,1,"int [1, 10]",0.9840490508333299
+RF,max_features,88,0.5118180245981607,"float [0.3, 0.9]",0.9840490508333299
+RF,min_samples_split,88,3,"int [2, 10]",0.9840490508333299
+Extra Trees,n_estimators,88,556,"int [200, 800]",0.9821670207284751
+Extra Trees,min_samples_leaf,88,1,"int [1, 10]",0.9821670207284751
+Extra Trees,max_features,88,0.8900970374388064,"float [0.3, 0.9]",0.9821670207284751
+Extra Trees,min_samples_split,88,4,"int [2, 10]",0.9821670207284751
+Ridge,alpha,88,0.0010001413035786585,"float [0.001, 100] log",0.9542756485435937
+Decision Tree,max_depth,88,20,"int [3, 20]",0.9694415621901786
+Decision Tree,min_samples_leaf,88,1,"int [1, 20]",0.9694415621901786
+Decision Tree,min_samples_split,88,5,"int [2, 20]",0.9694415621901786
+Decision Tree,max_features,88,0.7,"{sqrt, log2, None, 0.5, 0.7, 0.9}",0.9694415621901786
+KNN,n_neighbors,88,6,"int [2, 20]",0.9651486159628385
+KNN,weights,88,distance,"{uniform, distance}",0.9651486159628385
+KNN,p,88,1,"{1, 2}",0.9651486159628385
+SVR,C,88,151.0411088053621,"float [0.1, 1000] log",0.9875991015530184
+SVR,gamma,88,auto,"{scale, auto}",0.9875991015530184
+SVR,epsilon,88,0.9978252827608703,"float [0.001, 1] log",0.9875991015530184
+MLP,hidden_layer_sizes,88,"[256, 128, 64, 32]","{(64, 32), (128, 64), (128, 64, 32), (256, 128, 64), (256, 128, 64, 32), (128, 64, 32, 16)}",0.9873302621200457
+MLP,alpha,88,5.6802539115071395e-05,"float [1e-5, 1e-2] log",0.9873302621200457
+MLP,learning_rate_init,88,0.0007066895292372821,"float [1e-4, 1e-2] log",0.9873302621200457
+MLP,batch_size,88,128,"{32, 64, 128, auto}",0.9873302621200457
+XGBoost,n_estimators,55,1815,"int [300, 2000]",0.9880702076371481
+XGBoost,learning_rate,55,0.013493667119701305,"float [0.005, 0.15] log",0.9880702076371481
+XGBoost,max_depth,55,4,"int [4, 10]",0.9880702076371481
+XGBoost,subsample,55,0.6170919104411807,"float [0.6, 1.0]",0.9880702076371481
+XGBoost,colsample_bytree,55,0.8198605700354192,"float [0.5, 1.0]",0.9880702076371481
+XGBoost,min_child_weight,55,7,"int [1, 20]",0.9880702076371481
+XGBoost,gamma,55,0.4069636071966402,"float [0, 0.5]",0.9880702076371481
+XGBoost,reg_lambda,55,0.5225020168669495,"float [0.01, 10] log",0.9880702076371481
+XGBoost,reg_alpha,55,0.021556051647974528,"float [0, 2]",0.9880702076371481
+LightGBM,n_estimators,55,1160,"int [300, 2000]",0.9876045264409677
+LightGBM,learning_rate,55,0.022135550742016587,"float [0.005, 0.15] log",0.9876045264409677
+LightGBM,num_leaves,55,128,"int [31, 255]",0.9876045264409677
+LightGBM,subsample,55,0.8497789639462279,"float [0.6, 1.0]",0.9876045264409677
+LightGBM,colsample_bytree,55,0.5250382969373045,"float [0.5, 1.0]",0.9876045264409677
+LightGBM,min_child_samples,55,74,"int [5, 100]",0.9876045264409677
+LightGBM,reg_lambda,55,6.310265144837279,"float [0.01, 10] log",0.9876045264409677
+LightGBM,reg_alpha,55,1.762014134340787,"float [0, 2]",0.9876045264409677
+GBR,n_estimators,55,1428,"int [300, 1500]",0.9881494246458817
+GBR,learning_rate,55,0.026703151212638075,"float [0.005, 0.1] log",0.9881494246458817
+GBR,max_depth,55,3,"int [3, 7]",0.9881494246458817
+GBR,subsample,55,0.6824572503489164,"float [0.6, 1.0]",0.9881494246458817
+GBR,min_samples_leaf,55,9,"int [1, 10]",0.9881494246458817
+GBR,max_features,55,0.7106660856830488,"float [0.4, 1.0]",0.9881494246458817
+HistGBR,max_iter,55,1227,"int [300, 1500]",0.9879483595023162
+HistGBR,learning_rate,55,0.033507714531817834,"float [0.005, 0.1] log",0.9879483595023162
+HistGBR,max_depth,55,3,"int [3, 10]",0.9879483595023162
+HistGBR,l2_regularization,55,0.6263409162497441,"float [0, 1]",0.9879483595023162
+HistGBR,min_samples_leaf,55,49,"int [5, 50]",0.9879483595023162
+HistGBR,max_leaf_nodes,55,231,"int [20, 255]",0.9879483595023162
+RF,n_estimators,55,758,"int [200, 800]",0.9842410017350927
+RF,min_samples_leaf,55,1,"int [1, 10]",0.9842410017350927
+RF,max_features,55,0.4798735341126271,"float [0.3, 0.9]",0.9842410017350927
+RF,min_samples_split,55,3,"int [2, 10]",0.9842410017350927
+Extra Trees,n_estimators,55,205,"int [200, 800]",0.9827956599022911
+Extra Trees,min_samples_leaf,55,1,"int [1, 10]",0.9827956599022911
+Extra Trees,max_features,55,0.8962861531940839,"float [0.3, 0.9]",0.9827956599022911
+Extra Trees,min_samples_split,55,5,"int [2, 10]",0.9827956599022911
+Ridge,alpha,55,0.0010003072504438132,"float [0.001, 100] log",0.9540163577246574
+Decision Tree,max_depth,55,14,"int [3, 20]",0.9707340133941618
+Decision Tree,min_samples_leaf,55,1,"int [1, 20]",0.9707340133941618
+Decision Tree,min_samples_split,55,4,"int [2, 20]",0.9707340133941618
+Decision Tree,max_features,55,0.7,"{sqrt, log2, None, 0.5, 0.7, 0.9}",0.9707340133941618
+KNN,n_neighbors,55,7,"int [2, 20]",0.9670645094223502
+KNN,weights,55,distance,"{uniform, distance}",0.9670645094223502
+KNN,p,55,1,"{1, 2}",0.9670645094223502
+SVR,C,55,305.3261669672753,"float [0.1, 1000] log",0.9879031942751919
+SVR,gamma,55,auto,"{scale, auto}",0.9879031942751919
+SVR,epsilon,55,0.9995824452846899,"float [0.001, 1] log",0.9879031942751919
+MLP,hidden_layer_sizes,55,"[256, 128, 64]","{(64, 32), (128, 64), (128, 64, 32), (256, 128, 64), (256, 128, 64, 32), (128, 64, 32, 16)}",0.9875115411763289
+MLP,alpha,55,0.0001138819018824396,"float [1e-5, 1e-2] log",0.9875115411763289
+MLP,learning_rate_init,55,0.0003751814148183826,"float [1e-4, 1e-2] log",0.9875115411763289
+MLP,batch_size,55,32,"{32, 64, 128, auto}",0.9875115411763289
+XGBoost,n_estimators,101,1901,"int [300, 2000]",0.9879852376459949
+XGBoost,learning_rate,101,0.011065108997229903,"float [0.005, 0.15] log",0.9879852376459949
+XGBoost,max_depth,101,4,"int [4, 10]",0.9879852376459949
+XGBoost,subsample,101,0.6336895552210692,"float [0.6, 1.0]",0.9879852376459949
+XGBoost,colsample_bytree,101,0.5509324131252112,"float [0.5, 1.0]",0.9879852376459949
+XGBoost,min_child_weight,101,9,"int [1, 20]",0.9879852376459949
+XGBoost,gamma,101,0.0034048369661300315,"float [0, 0.5]",0.9879852376459949
+XGBoost,reg_lambda,101,1.1188169954943072,"float [0.01, 10] log",0.9879852376459949
+XGBoost,reg_alpha,101,1.9982734201587404,"float [0, 2]",0.9879852376459949
+LightGBM,n_estimators,101,1882,"int [300, 2000]",0.9873346087261086
+LightGBM,learning_rate,101,0.013607384429816025,"float [0.005, 0.15] log",0.9873346087261086
+LightGBM,num_leaves,101,146,"int [31, 255]",0.9873346087261086
+LightGBM,subsample,101,0.7012382043569544,"float [0.6, 1.0]",0.9873346087261086
+LightGBM,colsample_bytree,101,0.5158294563927697,"float [0.5, 1.0]",0.9873346087261086
+LightGBM,min_child_samples,101,75,"int [5, 100]",0.9873346087261086
+LightGBM,reg_lambda,101,0.20547130263154084,"float [0.01, 10] log",0.9873346087261086
+LightGBM,reg_alpha,101,0.33612215657061917,"float [0, 2]",0.9873346087261086
+GBR,n_estimators,101,1406,"int [300, 1500]",0.9879038061469829
+GBR,learning_rate,101,0.02381895609096091,"float [0.005, 0.1] log",0.9879038061469829
+GBR,max_depth,101,3,"int [3, 7]",0.9879038061469829
+GBR,subsample,101,0.7771727481503149,"float [0.6, 1.0]",0.9879038061469829
+GBR,min_samples_leaf,101,7,"int [1, 10]",0.9879038061469829
+GBR,max_features,101,0.90460243408721,"float [0.4, 1.0]",0.9879038061469829
+HistGBR,max_iter,101,1171,"int [300, 1500]",0.9877937078957192
+HistGBR,learning_rate,101,0.04722585617791766,"float [0.005, 0.1] log",0.9877937078957192
+HistGBR,max_depth,101,3,"int [3, 10]",0.9877937078957192
+HistGBR,l2_regularization,101,0.5542622532461083,"float [0, 1]",0.9877937078957192
+HistGBR,min_samples_leaf,101,5,"int [5, 50]",0.9877937078957192
+HistGBR,max_leaf_nodes,101,83,"int [20, 255]",0.9877937078957192
+RF,n_estimators,101,728,"int [200, 800]",0.9842262578318779
+RF,min_samples_leaf,101,1,"int [1, 10]",0.9842262578318779
+RF,max_features,101,0.46625545054125295,"float [0.3, 0.9]",0.9842262578318779
+RF,min_samples_split,101,3,"int [2, 10]",0.9842262578318779
+Extra Trees,n_estimators,101,799,"int [200, 800]",0.9828108692625376
+Extra Trees,min_samples_leaf,101,1,"int [1, 10]",0.9828108692625376
+Extra Trees,max_features,101,0.8941253384237946,"float [0.3, 0.9]",0.9828108692625376
+Extra Trees,min_samples_split,101,5,"int [2, 10]",0.9828108692625376
+Ridge,alpha,101,0.0010018582841036308,"float [0.001, 100] log",0.9539585873798915
+Decision Tree,max_depth,101,14,"int [3, 20]",0.9701455323594255
+Decision Tree,min_samples_leaf,101,2,"int [1, 20]",0.9701455323594255
+Decision Tree,min_samples_split,101,3,"int [2, 20]",0.9701455323594255
+Decision Tree,max_features,101,0.7,"{sqrt, log2, None, 0.5, 0.7, 0.9}",0.9701455323594255
+KNN,n_neighbors,101,8,"int [2, 20]",0.9648350566378564
+KNN,weights,101,distance,"{uniform, distance}",0.9648350566378564
+KNN,p,101,1,"{1, 2}",0.9648350566378564
+SVR,C,101,274.65682942455066,"float [0.1, 1000] log",0.9876001350516166
+SVR,gamma,101,auto,"{scale, auto}",0.9876001350516166
+SVR,epsilon,101,0.5520032438766563,"float [0.001, 1] log",0.9876001350516166
+MLP,hidden_layer_sizes,101,"[128, 64, 32]","{(64, 32), (128, 64), (128, 64, 32), (256, 128, 64), (256, 128, 64, 32), (128, 64, 32, 16)}",0.98715900902372
+MLP,alpha,101,2.8590290279613107e-05,"float [1e-5, 1e-2] log",0.98715900902372
+MLP,learning_rate_init,101,0.000588290645709218,"float [1e-4, 1e-2] log",0.98715900902372
+MLP,batch_size,101,32,"{32, 64, 128, auto}",0.98715900902372
+XGBoost,n_estimators,314,2000,"int [300, 2000]",0.9881441538582874
+XGBoost,learning_rate,314,0.011872377172487092,"float [0.005, 0.15] log",0.9881441538582874
+XGBoost,max_depth,314,4,"int [4, 10]",0.9881441538582874
+XGBoost,subsample,314,0.8031524607309769,"float [0.6, 1.0]",0.9881441538582874
+XGBoost,colsample_bytree,314,0.5239112685672139,"float [0.5, 1.0]",0.9881441538582874
+XGBoost,min_child_weight,314,12,"int [1, 20]",0.9881441538582874
+XGBoost,gamma,314,0.4882641207681936,"float [0, 0.5]",0.9881441538582874
+XGBoost,reg_lambda,314,0.7108766810711167,"float [0.01, 10] log",0.9881441538582874
+XGBoost,reg_alpha,314,1.8683621833802497,"float [0, 2]",0.9881441538582874
+LightGBM,n_estimators,314,1880,"int [300, 2000]",0.9878372417701315
+LightGBM,learning_rate,314,0.007774522168312307,"float [0.005, 0.15] log",0.9878372417701315
+LightGBM,num_leaves,314,34,"int [31, 255]",0.9878372417701315
+LightGBM,subsample,314,0.6440391273943592,"float [0.6, 1.0]",0.9878372417701315
+LightGBM,colsample_bytree,314,0.5186461791859676,"float [0.5, 1.0]",0.9878372417701315
+LightGBM,min_child_samples,314,18,"int [5, 100]",0.9878372417701315
+LightGBM,reg_lambda,314,2.4576437545650935,"float [0.01, 10] log",0.9878372417701315
+LightGBM,reg_alpha,314,0.021439889456077135,"float [0, 2]",0.9878372417701315
+GBR,n_estimators,314,1342,"int [300, 1500]",0.9880626090174424
+GBR,learning_rate,314,0.03178730251510368,"float [0.005, 0.1] log",0.9880626090174424
+GBR,max_depth,314,3,"int [3, 7]",0.9880626090174424
+GBR,subsample,314,0.9195491661451709,"float [0.6, 1.0]",0.9880626090174424
+GBR,min_samples_leaf,314,4,"int [1, 10]",0.9880626090174424
+GBR,max_features,314,0.7718433974412452,"float [0.4, 1.0]",0.9880626090174424
+HistGBR,max_iter,314,1225,"int [300, 1500]",0.987996712651355
+HistGBR,learning_rate,314,0.05508437866560518,"float [0.005, 0.1] log",0.987996712651355
+HistGBR,max_depth,314,3,"int [3, 10]",0.987996712651355
+HistGBR,l2_regularization,314,0.8763922451560511,"float [0, 1]",0.987996712651355
+HistGBR,min_samples_leaf,314,42,"int [5, 50]",0.987996712651355
+HistGBR,max_leaf_nodes,314,179,"int [20, 255]",0.987996712651355
+RF,n_estimators,314,756,"int [200, 800]",0.9842720013173756
+RF,min_samples_leaf,314,1,"int [1, 10]",0.9842720013173756
+RF,max_features,314,0.45016286026451025,"float [0.3, 0.9]",0.9842720013173756
+RF,min_samples_split,314,3,"int [2, 10]",0.9842720013173756
+Extra Trees,n_estimators,314,621,"int [200, 800]",0.9828425714032167
+Extra Trees,min_samples_leaf,314,1,"int [1, 10]",0.9828425714032167
+Extra Trees,max_features,314,0.8985992383523572,"float [0.3, 0.9]",0.9828425714032167
+Extra Trees,min_samples_split,314,5,"int [2, 10]",0.9828425714032167
+Ridge,alpha,314,0.0010003380164810055,"float [0.001, 100] log",0.954031317444259
+Decision Tree,max_depth,314,17,"int [3, 20]",0.9693674520605906
+Decision Tree,min_samples_leaf,314,1,"int [1, 20]",0.9693674520605906
+Decision Tree,min_samples_split,314,5,"int [2, 20]",0.9693674520605906
+Decision Tree,max_features,314,0.7,"{sqrt, log2, None, 0.5, 0.7, 0.9}",0.9693674520605906
+KNN,n_neighbors,314,8,"int [2, 20]",0.9661586681163008
+KNN,weights,314,distance,"{uniform, distance}",0.9661586681163008
+KNN,p,314,1,"{1, 2}",0.9661586681163008
+SVR,C,314,206.75122067493277,"float [0.1, 1000] log",0.9879428708820466
+SVR,gamma,314,auto,"{scale, auto}",0.9879428708820466
+SVR,epsilon,314,0.9823646210900036,"float [0.001, 1] log",0.9879428708820466
+MLP,hidden_layer_sizes,314,"[256, 128, 64]","{(64, 32), (128, 64), (128, 64, 32), (256, 128, 64), (256, 128, 64, 32), (128, 64, 32, 16)}",0.9873850691702255
+MLP,alpha,314,0.004313577670108204,"float [1e-5, 1e-2] log",0.9873850691702255
+MLP,learning_rate_init,314,0.0005439960553061085,"float [1e-4, 1e-2] log",0.9873850691702255
+MLP,batch_size,314,128,"{32, 64, 128, auto}",0.9873850691702255
