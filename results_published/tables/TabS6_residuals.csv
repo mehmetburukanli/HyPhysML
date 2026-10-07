@@ -1,0 +1,3 @@
+Scope,n,mean_kV,sd_kV,Shapiro_W,Shapiro_p
+seed 42 test set,1332,0.06635,2.30078,0.98977,0.0
+"pooled, 10 seeds (Shapiro on random 5000)",13320,0.01272,2.33624,0.99246,0.0

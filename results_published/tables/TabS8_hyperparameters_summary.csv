@@ -1,0 +1,53 @@
+Model,Hyperparameter,Search space,"Selected: median [min, max] over seeds",Seed 42
+XGBoost,colsample_bytree,"float [0.5, 1.0]","0.5374 [0.5024, 0.8223]",0.5024040798282718
+XGBoost,gamma,"float [0, 0.5]","0.3469 [0.003405, 0.4948]",0.13691546647202285
+XGBoost,learning_rate,"float [0.005, 0.15] log","0.01306 [0.009488, 0.02633]",0.012631860083634637
+XGBoost,max_depth,"int [4, 10]","4 [4, 5]",4
+XGBoost,min_child_weight,"int [1, 20]","10 [5, 17]",16
+XGBoost,n_estimators,"int [300, 2000]","1698 [1066, 2000]",1866
+XGBoost,reg_alpha,"float [0, 2]","0.6132 [0.02156, 1.998]",0.6575960678898942
+XGBoost,reg_lambda,"float [0.01, 10] log","0.6167 [0.02912, 1.805]",1.484115869197676
+XGBoost,subsample,"float [0.6, 1.0]","0.7543 [0.6171, 0.8558]",0.7053587050782623
+LightGBM,colsample_bytree,"float [0.5, 1.0]","0.5261 [0.5048, 0.799]",0.5271642724415067
+LightGBM,learning_rate,"float [0.005, 0.15] log","0.02105 [0.007775, 0.03368]",0.02970351988070694
+LightGBM,min_child_samples,"int [5, 100]","80 [6, 97]",95
+LightGBM,n_estimators,"int [300, 2000]","1432 [900, 1985]",1110
+LightGBM,num_leaves,"int [31, 255]","87.5 [32, 183]",83
+LightGBM,reg_alpha,"float [0, 2]","0.4872 [0.02144, 1.989]",0.051268637660452025
+LightGBM,reg_lambda,"float [0.01, 10] log","1.593 [0.08318, 9.678]",2.880777929521901
+LightGBM,subsample,"float [0.6, 1.0]","0.7624 [0.6025, 0.8958]",0.8958225913457278
+GBR,learning_rate,"float [0.005, 0.1] log","0.02456 [0.005853, 0.03179]",0.026977860092398526
+GBR,max_depth,"int [3, 7]","3 [3, 6]",3
+GBR,max_features,"float [0.4, 1.0]","0.4651 [0.4077, 0.9046]",0.49572730986426233
+GBR,min_samples_leaf,"int [1, 10]","6 [3, 10]",5
+GBR,n_estimators,"int [300, 1500]","1418 [1342, 1447]",1422
+GBR,subsample,"float [0.6, 1.0]","0.6769 [0.6004, 0.9195]",0.6712531155486609
+HistGBR,l2_regularization,"float [0, 1]","0.5903 [0.08355, 0.9636]",0.17905272278229775
+HistGBR,learning_rate,"float [0.005, 0.1] log","0.04707 [0.03185, 0.05836]",0.058359441252433336
+HistGBR,max_depth,"int [3, 10]","3 [3, 3]",3
+HistGBR,max_iter,"int [300, 1500]","1348 [1171, 1497]",1338
+HistGBR,max_leaf_nodes,"int [20, 255]","140.5 [58, 248]",248
+HistGBR,min_samples_leaf,"int [5, 50]","21.5 [5, 50]",41
+RF,max_features,"float [0.3, 0.9]","0.4687 [0.385, 0.5486]",0.38499244137560074
+RF,min_samples_leaf,"int [1, 10]","1 [1, 1]",1
+RF,min_samples_split,"int [2, 10]","3 [3, 3]",3
+RF,n_estimators,"int [200, 800]","715.5 [425, 776]",425
+Extra Trees,max_features,"float [0.3, 0.9]","0.8912 [0.8879, 0.8993]",0.8917176329712204
+Extra Trees,min_samples_leaf,"int [1, 10]","1 [1, 1]",1
+Extra Trees,min_samples_split,"int [2, 10]","4.5 [4, 5]",5
+Extra Trees,n_estimators,"int [200, 800]","622 [205, 799]",695
+Ridge,alpha,"float [0.001, 100] log","0.001 [0.001, 0.001002]",0.0010001957329516197
+Decision Tree,max_depth,"int [3, 20]","16.5 [13, 20]",15
+Decision Tree,max_features,"{sqrt, log2, None, 0.5, 0.7, 0.9}","0.7 [0.5, 0.9]",0.5
+Decision Tree,min_samples_leaf,"int [1, 20]","1 [1, 2]",2
+Decision Tree,min_samples_split,"int [2, 20]","4.5 [3, 6]",5
+KNN,n_neighbors,"int [2, 20]","7 [6, 8]",7
+KNN,p,"{1, 2}","1 [1, 1]",1
+KNN,weights,"{uniform, distance}",distance (10/10),distance
+SVR,C,"float [0.1, 1000] log","199.5 [111.1, 477.8]",128.29248559819334
+SVR,epsilon,"float [0.001, 1] log","0.9849 [0.552, 0.9997]",0.9578967300628453
+SVR,gamma,"{scale, auto}",auto (10/10),auto
+MLP,alpha,"float [1e-5, 1e-2] log","0.00103 [2.169e-05, 0.006418]",0.0037830918089551847
+MLP,batch_size,"{32, 64, 128, auto}",128 (5/10); 32 (3/10); 64 (1/10); auto (1/10),128
+MLP,hidden_layer_sizes,"{(64, 32), (128, 64), (128, 64, 32), (256, 128, 64), (256, 128, 64, 32), (128, 64, 32, 16)}","[256, 128, 64] (5/10); [256, 128, 64, 32] (4/10); [128, 64, 32] (1/10)","[256, 128, 64, 32]"
+MLP,learning_rate_init,"float [1e-4, 1e-2] log","0.0006475 [0.0001144, 0.004329]",0.0021709498294498588

@@ -1,1819 +1,1475 @@
-﻿# ========================================================================
-# HyPhysML — Physics-Informed Hybrid Machine Learning
-# Complete analysis pipeline consolidated into a single script
+# ========================================================================
+# HyPhysML — analysis pipeline, version 2 (revised manuscript, Scientific Reports)
+# ========================================================================
+#
+# This script replaces version 1 (legacy/hyphysml_v1_original_submission.py). It changes the
+# evaluation protocol where the reviewers identified a problem and adds the
+# analyses requested in the review. Every change is tagged [R1-x] / [R2-x]
+# with the reviewer and comment number it answers.
+#
+#   [R2-1]  Hyperparameter optimisation is NESTED: for every evaluation seed,
+#           Optuna-TPE runs on that seed's training set only (5-fold CV inside
+#           it). The test set of a seed is never seen during tuning. The old
+#           seed-999 HPO subset overlapped ~80% of every test set; that overlap
+#           is computed and saved for the response letter. All split indices
+#           are saved.
+#   [R2-2]  The Obenaus regression is treated explicitly as an AUXILIARY model.
+#           Its coefficients are reported as mean ± s.d. over the 10 seeds, with
+#           and without the insulator-type indicators (CD and AD are collinear
+#           with the type indicators, so their coefficients are only identified
+#           without them). The unsourced grey "theoretical" bands are removed.
+#           New: a prediction-level monotonicity audit of every test prediction
+#           (does predicted FOV fall when SDD, RH, aging or J increase?), and a
+#           genuinely physics-constrained variant, HyPhysML-MC, whose prediction
+#           is monotone in SDD, RH, aging and J by construction.
+#   [R2-3]  Noise is injected into the RAW inputs and all 25 features are then
+#           rebuilt (logs, products, ratios, composites). Clipping rules are
+#           explicit and the clipped fraction is reported. Five repetitions per
+#           level, all 10 seeds, mean ± s.d. The old single-column perturbation
+#           is also run, labelled as such, to explain the earlier result.
+#   [R2-4]  Learning curve uses the main evaluation protocol (stratified 80/20
+#           split, stratified sub-samples of the training set, fixed test set);
+#           at 100% it reproduces the main result. A diagnostic reproduces the
+#           old curve (unshuffled 5-fold CV on type-ordered data) to explain the
+#           0.953 vs 0.989 discrepancy.
+#   [R2-5]  Two bootstrap intervals, clearly separated: (a) seed-level CI of the
+#           10-seed MEAN R² (resampling the 10 seed values), (b) observation-
+#           level CI of the R² of ONE split (seed 42 test set).
+#   [R2-6]  Search spaces and selected values for ALL 11 tuned models (incl.
+#           decision tree, SVR, MLP), per seed. Scaling (RobustScaler) is done
+#           inside a Pipeline, so in HPO it is fitted on the CV-training folds
+#           only. The ridge meta-learner intercept is stored and reported.
+#           The KNN base learner now uses the tuned KNN settings (the old code
+#           used a fixed k = 3, contradicting the text).
+#   [R2-7]  Meta-learner weights and intercept stored for every seed; mean ± s.d.
+#   [R2-8]  Figures are regenerated so that captions can match them: a real
+#           14-model predicted-vs-actual grid, the box-plot of R²/RMSE/MAPE, and
+#           raw-input response curves (in place of the PDPs of engineered
+#           features).
+#   [R2-9]  Test-set size is printed and saved (n = 1,332 for every seed).
+#   [R1-1]  Data-level physical analysis: empirical SDD exponent per test
+#           condition, and monotonicity of the measured FOV in each factor.
+#   [R1-3]  Scope of applicability: leave-one-level-out extrapolation tests
+#           (SDD, RH, aging, insulator type).
+#
+# Also corrected:
+#   * SHAP is computed for the full stacking model (Shapley values are linear,
+#     so phi_stack = sum_b w_b * phi_b with a common interventional background).
+#     The old Fig. 2 showed SHAP of the XGBoost base learner only.
+#   * Permutation importance is computed on the full stacking model, plus a
+#     grouped version that permutes a RAW variable and rebuilds its derived
+#     features.
+#   * The out-of-fold KFold seed equals the evaluation seed (the manuscript said
+#     "fold seed 42, held fixed"; the code never did that). Kept, and reported.
+#
+# Run:            python hyphysml.py
+# Smoke test:     HYPHYSML_FAST=1 python hyphysml.py
+# Seed subset:    HYPHYSML_SEEDS=42,7,13 python hyphysml.py
+#                 (several processes may share the same output folder; each
+#                  seed is checkpointed, and the final aggregation runs once all
+#                  10 seeds are present.)
+# Trials per model and seed: N_OPTUNA (default 200; override with HYPHYSML_N_OPTUNA)
 # ========================================================================
 
-
-# ========================================================================
-# [MARKDOWN CELL 0]
-# HyPhysML ULTIMATE
-# **Comprehensive EDA + 14-Model Benchmark + Statistical Analysis**
-# 
-# ## Steps
-# 1. **Cell 1** → Setup + validation  
-# 2. **Cell 2** → Load data  
-# 3. **Cell 3** → Parameters  
-# 4. **Cell 4** → Run all (~55 min GPU T4, EDA included)
-# ========================================================================
-
-
-# ========================================================================
-# [CODE CELL 1]
-# ========================================================================
-# ── Setup + validation ──────────────────────────────────────────
-# For local setup run in terminal:
-# pip install optuna xgboost lightgbm shap openpyxl scikit-learn pandas matplotlib seaborn scipy
-
-import sys
-packages = {}
-for pkg in ["optuna","xgboost","lightgbm","shap"]:
-    try:
-        m = __import__(pkg)
-        packages[pkg] = getattr(m,"__version__","?")
-    except ImportError:
-        packages[pkg] = "YOK ⚠"
-
-for pkg,ver in packages.items():
-    print(f"  {'✅' if 'YOK' not in ver else '❌'} {pkg:<12} {ver}")
-
-if "YOK" in packages.get("xgboost",""):
-    print("\n❌ XGBoost not installed! Restart the kernel and try again.")
-else:
-    # Quick performance test
-    import numpy as np
-    from sklearn.datasets import make_regression
-    from sklearn.metrics import r2_score
-    import xgboost as xgb
-    X_t, y_t = make_regression(n_samples=500, n_features=10, noise=5, random_state=42)
-    m_xgb = xgb.XGBRegressor(n_estimators=100, random_state=42, verbosity=0)
-    m_xgb.fit(X_t[:400], y_t[:400])
-    print(f"\n✅ XGBoost works! Test R²={r2_score(y_t[400:], m_xgb.predict(X_t[400:])):.4f}")
-
-
-# ========================================================================
-# [CODE CELL 2]
-# ========================================================================
-# ── Load data ───────────────────────────────────────────────────
-import os
-
-# Paths resolve relative to this file, so the repository runs as-is after the
-# dataset has been placed in data/. Both can be overridden with environment
-# variables, e.g.  FOV_DATA=/path/to/file.xlsx  FOV_OUT=/path/to/results
-try:
-    _HERE = os.path.dirname(os.path.abspath(__file__))
-except NameError:                      # interactive session / notebook
-    _HERE = os.getcwd()
-
-DATA_PATH = os.environ.get("FOV_DATA", os.path.join(_HERE, "data", "FOV dataset.xlsx"))
-OUT_DIR   = os.environ.get("FOV_OUT",  os.path.join(_HERE, "results"))
-
-os.makedirs(OUT_DIR, exist_ok=True)
-if not os.path.isfile(DATA_PATH):
-    raise FileNotFoundError(
-        f"Data file not found: {DATA_PATH}\n"
-        "Download 'FOV dataset.xlsx' from https://doi.org/10.17632/8r7k4cgkg8.1 "
-        "and place it in the data/ directory, or set the FOV_DATA environment variable."
-    )
-print(f"Data file found: {DATA_PATH}")
-print(f"Output directory: {OUT_DIR}")
-
-
-# ========================================================================
-# [CODE CELL 3]
-# ========================================================================
-# ── Parameters ───────────────────────────────────────────────────
-SEEDS     = [42, 7, 13, 99, 2024, 17, 88, 55, 101, 314]
-TEST_SIZE = 0.20
-N_FOLDS   = 5
-N_OPTUNA  = 200   # Bayesian HPO trials (TPE sampler)
-N_BOOT    = 1000
-N_SHAP    = 200
-SKIP_HPO  = False # True = default params only (quick test)
-
-print(f"N_OPTUNA={N_OPTUNA}  |  GPU T4 ~{N_OPTUNA//4} min  |  CPU ~{N_OPTUNA//1.5:.0f} min")
-print(f"SKIP_HPO={SKIP_HPO}  ← False: full Optuna, True: quick test")
-
-
-# ========================================================================
-# [CODE CELL 4]
-# ========================================================================
-# ════════════════════════════════════════════════════════════════
-# MAIN PIPELINE — Do not modify, run directly
-# DATA_PATH, OUT_DIR, SEEDS, N_OPTUNA come from previous cells
-# ════════════════════════════════════════════════════════════════
-
-import warnings, time, os
+import os, sys, json, time, pickle, warnings, platform
 warnings.filterwarnings("ignore")
+
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 import seaborn as sns
 from scipy import stats
-from scipy.stats import mannwhitneyu
+from scipy.stats import mannwhitneyu, shapiro, probplot, gaussian_kde
 
-from sklearn.base         import BaseEstimator, RegressorMixin, clone
-from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
+import sklearn
+from sklearn.base import BaseEstimator, RegressorMixin, clone
+from sklearn.linear_model import Ridge
 from sklearn.preprocessing import RobustScaler
-from sklearn.pipeline      import Pipeline
-from sklearn.svm           import SVR
-from sklearn.tree          import DecisionTreeRegressor
-from sklearn.neighbors     import KNeighborsRegressor
-from sklearn.ensemble      import (RandomForestRegressor, ExtraTreesRegressor,
-                                    GradientBoostingRegressor,
-                                    HistGradientBoostingRegressor)
-from sklearn.neural_network  import MLPRegressor
-from sklearn.model_selection import (train_test_split, KFold,
-                                      cross_val_score, learning_curve,
-                                      RandomizedSearchCV)
-from sklearn.metrics         import (mean_squared_error, mean_absolute_error,
-                                      r2_score)
-from sklearn.inspection      import permutation_importance, PartialDependenceDisplay
+from sklearn.pipeline import Pipeline
+from sklearn.svm import SVR
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.ensemble import (RandomForestRegressor, ExtraTreesRegressor,
+                              GradientBoostingRegressor, HistGradientBoostingRegressor)
+from sklearn.neural_network import MLPRegressor
+from sklearn.model_selection import train_test_split, KFold, cross_val_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.inspection import permutation_importance
+
+import optuna
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+import xgboost as xgb
+import lightgbm as lgb
+try:
+    import shap
+    HAS_SHAP = True
+except ImportError:
+    HAS_SHAP = False
+
+# ════════════════════════════════════════════════════════════════════════
+# §0  CONFIGURATION
+# ════════════════════════════════════════════════════════════════════════
+try:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _HERE = os.getcwd()
+
+def _first_existing(paths):
+    for p in paths:
+        if p and os.path.isfile(p):
+            return p
+    return paths[-1]
+
+DATA_PATH = os.environ.get("FOV_DATA") or _first_existing([
+    os.path.join(_HERE, "data", "FOV dataset.xlsx"),
+    os.path.join(_HERE, "FOV dataset.xlsx"),
+    os.path.join(os.path.dirname(_HERE), "FOV dataset.xlsx"),
+])
+OUT_DIR = os.environ.get("FOV_OUT", os.path.join(_HERE, "results"))
+
+FAST = os.environ.get("HYPHYSML_FAST", "0") == "1"
+
+SEEDS        = [42, 7, 13, 99, 2024, 17, 88, 55, 101, 314]
+TEST_SIZE    = 0.20
+N_FOLDS      = 5                     # OOF folds inside HyPhysML and HPO CV folds
+N_OPTUNA     = int(os.environ.get("HYPHYSML_N_OPTUNA", 200))
+N_BOOT       = 1000
+HPO_CV_JOBS  = int(os.environ.get("HYPHYSML_CV_JOBS", min(5, os.cpu_count() or 1)))  # parallel CV folds in HPO
+USE_GPU      = os.environ.get("HYPHYSML_GPU", "0") == "1"   # XGBoost on CUDA (Colab GPU runtime)
+SKIP_HPO     = False                 # True: fixed default settings, no tuning
+
+NOISE_FEATS  = ["SDD", "RH", "Aging"]
+NOISE_LEVELS = [0.05, 0.10, 0.15, 0.20]          # fraction of the raw training s.d.
+N_NOISE_REP  = 5
+CLIP_RULES   = {"SDD": (1e-3, None), "RH": (1.0, 100.0), "Aging": (0.0, None)}
+
+LC_SEEDS     = [42, 7, 13]                        # learning curve seeds
+LC_FRACS     = [0.10, 0.20, 0.30, 0.50, 0.70, 1.00]
+POST_SEED    = 42                                 # seed used for SHAP / figures
+
+N_SHAP_BG    = 100
+N_SHAP       = 200
+N_KERNEL     = 300                                # KernelExplainer budget (KNN only)
+N_PERM_REP   = 10
+
+RUN_EDA             = True
+RUN_EXTRAPOLATION   = True   # [R1-3] leave-one-level-out tests (~1 h CPU)
+RUN_LC_DIAGNOSTIC   = True   # [R2-4] reproduce old learning-curve protocol (~30 min CPU)
+
+if FAST:
+    SEEDS = [42, 7]; N_OPTUNA = int(os.environ.get("HYPHYSML_N_OPTUNA", 2))
+    N_NOISE_REP = 2; LC_SEEDS = [42]; LC_FRACS = [0.30, 1.00]
+    N_SHAP_BG = 30; N_SHAP = 30; N_KERNEL = 40; N_PERM_REP = 2; N_BOOT = 200
+    RUN_EXTRAPOLATION = True; RUN_LC_DIAGNOSTIC = False
+
+if os.environ.get("HYPHYSML_EXTRAPOLATION") is not None:
+    RUN_EXTRAPOLATION = os.environ["HYPHYSML_EXTRAPOLATION"] == "1"
+if os.environ.get("HYPHYSML_LC_DIAGNOSTIC") is not None:
+    RUN_LC_DIAGNOSTIC = os.environ["HYPHYSML_LC_DIAGNOSTIC"] == "1"
+
+_seed_env = os.environ.get("HYPHYSML_SEEDS")
+RUN_SEEDS = [int(s) for s in _seed_env.split(",")] if _seed_env else list(SEEDS)
+
+FIG_DIR = os.path.join(OUT_DIR, "figures")
+TAB_DIR = os.path.join(OUT_DIR, "tables")
+CK_DIR  = os.path.join(OUT_DIR, "checkpoints")
+for _d in (OUT_DIR, FIG_DIR, TAB_DIR, CK_DIR):
+    os.makedirs(_d, exist_ok=True)
+
+if not os.path.isfile(DATA_PATH):
+    raise FileNotFoundError(
+        f"Data file not found: {DATA_PATH}\nDownload 'FOV dataset.xlsx' from "
+        "https://doi.org/10.17632/8r7k4cgkg8.1 or set FOV_DATA.")
+
+def section(t):
+    print(f"\n{'=' * 70}\n  {t}\n{'=' * 70}", flush=True)
+
+section("§0  Configuration")
+print(f"  Data      : {DATA_PATH}")
+print(f"  Output    : {OUT_DIR}")
+print(f"  FAST={FAST}  SEEDS={SEEDS}  running now={RUN_SEEDS}  N_OPTUNA={N_OPTUNA}")
+print(f"  CPU cores={os.cpu_count()}  HPO_CV_JOBS={HPO_CV_JOBS}  XGBoost GPU={USE_GPU}")
+VERSIONS = {"python": platform.python_version(), "numpy": np.__version__,
+            "pandas": pd.__version__, "scikit-learn": sklearn.__version__,
+            "xgboost": xgb.__version__, "lightgbm": lgb.__version__,
+            "optuna": optuna.__version__, "shap": shap.__version__ if HAS_SHAP else "n/a",
+            "scipy": __import__("scipy").__version__}
+print("  Versions  :", VERSIONS)
+with open(os.path.join(OUT_DIR, "environment_versions.json"), "w") as f:
+    json.dump(VERSIONS, f, indent=2)
 
 try:
-    import optuna; optuna.logging.set_verbosity(optuna.logging.WARNING)
-    HAS_OPTUNA = True
-except: HAS_OPTUNA = False
-try:
-    import xgboost as xgb; HAS_XGB = True
-except: HAS_XGB = False
-try:
-    import lightgbm as lgb; HAS_LGB = True
-except: HAS_LGB = False
-try:
-    import shap; HAS_SHAP = True
-except: HAS_SHAP = False
+    plt.style.use("seaborn-v0_8-whitegrid")
+except Exception:
+    pass
+PALETTE = ["#2166AC", "#D7191C", "#4DAC26", "#E08214", "#762A83", "#1B7837",
+           "#F4A582", "#8073AC", "#B35806", "#01665E", "#C2A5CF", "#A6DBA0",
+           "#3288BD", "#FDDBC7"]
+plt.rcParams.update({"font.family": "DejaVu Serif", "font.size": 11,
+                     "axes.labelsize": 12, "axes.titlesize": 12,
+                     "savefig.dpi": 300, "savefig.bbox": "tight"})
 
-print(f"Environment: Optuna={HAS_OPTUNA} XGB={HAS_XGB} LGB={HAS_LGB} SHAP={HAS_SHAP}")
-if not HAS_XGB:
-    print("⚠ XGBoost missing — pip install xgboost  →  Restart kernel")
-    print("  Fix: pip install xgboost  →  Restart kernel  →  Run again")
-
-try: plt.style.use("seaborn-v0_8-whitegrid")
-except:
-    try: plt.style.use("seaborn-whitegrid")
-    except: pass
-
-PALETTE = ["#2166AC","#D7191C","#4DAC26","#E08214","#762A83",
-           "#1B7837","#F4A582","#8073AC","#B35806","#01665E",
-           "#C2A5CF","#A6DBA0","#3288BD","#FDDBC7"]
-plt.rcParams.update({"font.family":"DejaVu Serif","font.size":11,"axes.labelsize":12,
-    "axes.titlesize":13,"savefig.dpi":300,"savefig.bbox":"tight"})
-
-FIG_N=[0]
 def savefig(name):
-    FIG_N[0]+=1; fp=os.path.join(OUT_DIR,f"fig{FIG_N[0]:02d}_{name}")
-    plt.savefig(fp); plt.show(); plt.close(); print(f"  ✔ {fp}")
+    fp = os.path.join(FIG_DIR, name)
+    plt.savefig(fp); plt.close("all"); print(f"  [fig] {name}")
 
-def section(t): print(f"\n{'='*60}\n  {t}\n{'='*60}")
+def savetab(df_, name, index=False):
+    df_.to_csv(os.path.join(TAB_DIR, name), index=index); print(f"  [tab] {name}")
 
-# ════ §1 DATA + FEATURE ENGINEERING ════════════════════════════
-section("§1  Data + Feature Engineering")
+# ════════════════════════════════════════════════════════════════════════
+# §1  DATA + FEATURE ENGINEERING (one function, reused for noise / probes)
+# ════════════════════════════════════════════════════════════════════════
+section("§1  Data + feature engineering")
+RAW_COLS = ["Sample", "CD", "AD", "CF", "RH", "Aging", "J", "K", "SDD"]
 df_raw = pd.read_excel(DATA_PATH, sheet_name="Whole samples")
-df_raw.columns = ["Sample","CD","AD","CF","RH","Aging","J","K","SDD","FOV"]
-df = df_raw.copy()
-df["log_SDD"]=np.log(df["SDD"]); df["log_RH"]=np.log(df["RH"])
-df["log_J"]=np.log(df["J"].clip(lower=0.5)); df["log_CD"]=np.log(df["CD"])
-df["RH_x_SDD"]=df["RH"]*df["SDD"]; df["RH_x_logSDD"]=df["RH"]*df["log_SDD"]
-df["JK_product"]=df["J"]*df["K"]; df["Age_x_SDD"]=df["Aging"]*df["SDD"]
-df["env_stress"]=(df["RH"]/100)*df["SDD"]*(1+df["Aging"]/45)
-df["SDD_norm"]=df["SDD"]/(df["CD"]/100)
-df["logRH_x_logSDD"]=df["log_RH"]*df["log_SDD"]
-df["logJ_x_logSDD"]=df["log_J"]*df["log_SDD"]
-df["Age_x_logSDD"]=df["Aging"]*df["log_SDD"]
-smp=pd.get_dummies(df["Sample"],prefix="Smp",drop_first=False); df=pd.concat([df,smp],axis=1)
-SMP_COLS=list(smp.columns)
-ALL_FEATS=(["CD","AD","CF","RH","Aging","J","K","SDD","log_SDD","log_RH","log_J","log_CD",
-            "RH_x_SDD","RH_x_logSDD","JK_product","Age_x_SDD","env_stress","SDD_norm",
-            "logRH_x_logSDD","logJ_x_logSDD","Age_x_logSDD"]+SMP_COLS)
-FN=ALL_FEATS; X_all=df[ALL_FEATS].values; y_all=df["FOV"].values
-idx_all=np.arange(len(X_all))
-print(f"  {df_raw.shape[0]} records  |  {len(ALL_FEATS)} features  |  FOV: {y_all.min():.2f}–{y_all.max():.2f} kV")
+df_raw.columns = RAW_COLS + ["FOV"]
+SMP_LEVELS = sorted(df_raw["Sample"].unique())
+SMP_COLS = [f"Smp_{s}" for s in SMP_LEVELS]
+NUM_RAW = ["CD", "AD", "CF", "RH", "Aging", "J", "K", "SDD"]
+DERIVED = ["log_SDD", "log_RH", "log_J", "log_CD", "RH_x_SDD", "RH_x_logSDD",
+           "JK_product", "Age_x_SDD", "env_stress", "SDD_norm", "logRH_x_logSDD",
+           "logJ_x_logSDD", "Age_x_logSDD"]
+FN = NUM_RAW + DERIVED + SMP_COLS          # 8 + 13 + 4 = 25 features (same order as before)
 
-# ════ §1.5 VIF — Multicollinearity Check ══════════════════════════
-section("§1.5  VIF — Multicollinearity Check")
-from statsmodels.stats.outliers_influence import variance_inflation_factor
-from statsmodels.tools.tools import add_constant
+def build_features(raw):
+    """Raw design variables -> 25-column feature frame. Every derived feature is
+    recomputed from the raw values passed in, so perturbing a raw input
+    propagates to all features that depend on it."""
+    f = pd.DataFrame(index=raw.index)
+    for c in NUM_RAW:
+        f[c] = raw[c].astype(float)
+    f["log_SDD"] = np.log(f["SDD"]); f["log_RH"] = np.log(f["RH"])
+    f["log_J"] = np.log(f["J"].clip(lower=0.5)); f["log_CD"] = np.log(f["CD"])
+    f["RH_x_SDD"] = f["RH"] * f["SDD"]; f["RH_x_logSDD"] = f["RH"] * f["log_SDD"]
+    f["JK_product"] = f["J"] * f["K"]; f["Age_x_SDD"] = f["Aging"] * f["SDD"]
+    f["env_stress"] = (f["RH"] / 100) * f["SDD"] * (1 + f["Aging"] / 45)
+    f["SDD_norm"] = f["SDD"] / (f["CD"] / 100)
+    f["logRH_x_logSDD"] = f["log_RH"] * f["log_SDD"]
+    f["logJ_x_logSDD"] = f["log_J"] * f["log_SDD"]
+    f["Age_x_logSDD"] = f["Aging"] * f["log_SDD"]
+    for s, c in zip(SMP_LEVELS, SMP_COLS):
+        f[c] = (raw["Sample"] == s).astype(float)
+    return f[FN]
 
-# Only continuous engineered features (exclude dummy columns)
-_VIF_COLS = ["CD","AD","CF","RH","Aging","J","K","SDD",
-             "log_SDD","log_RH","log_J","log_CD",
-             "RH_x_SDD","RH_x_logSDD","JK_product","Age_x_SDD",
-             "env_stress","SDD_norm","logRH_x_logSDD","logJ_x_logSDD","Age_x_logSDD"]
-_X_vif = add_constant(df[_VIF_COLS].astype(float))
-_vif_data = pd.DataFrame({
-    "Feature": _VIF_COLS,
-    "VIF": [variance_inflation_factor(_X_vif.values, i+1) for i in range(len(_VIF_COLS))]
-}).sort_values("VIF", ascending=False).reset_index(drop=True)
-_vif_data["Severity"] = _vif_data["VIF"].apply(
-    lambda v: "HIGH (>10)" if v > 10 else ("MODERATE (5-10)" if v > 5 else "OK (<5)"))
+X_df = build_features(df_raw)
+X_all = X_df.values.astype(float)
+y_all = df_raw["FOV"].values.astype(float)
+idx_all = np.arange(len(y_all))
+STRAT = df_raw["Sample"].values
+print(f"  {len(y_all)} records | {len(FN)} features | FOV {y_all.min():.2f}–{y_all.max():.2f} kV")
+print("  Levels:", {c: sorted(df_raw[c].unique().tolist()) for c in ["RH", "Aging", "SDD", "J", "K"]})
 
-print(f"\n  {'Feature':<22} {'VIF':>8}  Severity")
-print("  " + "-"*45)
-for _, row in _vif_data.iterrows():
-    flag = "⚠" if row["VIF"] > 10 else (" ~" if row["VIF"] > 5 else "  ")
-    print(f"  {flag} {row['Feature']:<20} {row['VIF']:>8.2f}  {row['Severity']}")
+def split(seed):
+    return train_test_split(idx_all, test_size=TEST_SIZE, random_state=seed, stratify=STRAT)
 
-_high_vif = _vif_data[_vif_data["VIF"] > 10]
-print(f"\n  Features with VIF>10: {len(_high_vif)}  "
-      f"(tree-based models are robust to multicollinearity)")
+# ════════════════════════════════════════════════════════════════════════
+# §2  OLD-PROTOCOL DIAGNOSTICS + SAVED SPLITS  [R2-1] [R2-9]
+# ════════════════════════════════════════════════════════════════════════
+section("§2  Split indices and overlap with the old seed-999 HPO subset")
+idx_hpo_old, _ = train_test_split(idx_all, test_size=0.20, random_state=999, stratify=STRAT)
+_hpo_old = set(idx_hpo_old.tolist())
+_ov_rows, _split_rows = [], []
+for s in SEEDS:
+    tr, te = split(s)
+    ov = sum(i in _hpo_old for i in te)
+    _ov_rows.append({"Seed": s, "n_train": len(tr), "n_test": len(te),
+                     "test_in_old_HPO_subset": ov, "pct": round(100 * ov / len(te), 1),
+                     "test_in_new_HPO_data": 0})      # new HPO uses idx_tr only
+    _split_rows += [{"Seed": s, "index": int(i), "role": "train"} for i in tr]
+    _split_rows += [{"Seed": s, "index": int(i), "role": "test"} for i in te]
+_ov_df = pd.DataFrame(_ov_rows)
+print(_ov_df.to_string(index=False))
+savetab(_ov_df, "R2-1_old_HPO_test_overlap.csv")
+pd.DataFrame(_split_rows).to_csv(os.path.join(TAB_DIR, "split_indices_all_seeds.csv.gz"),
+                                 index=False, compression="gzip")
+pd.DataFrame({"index": idx_hpo_old}).to_csv(os.path.join(TAB_DIR, "old_seed999_HPO_indices.csv"), index=False)
 
-# VIF bar chart
-fig, ax = plt.subplots(figsize=(10, 7))
-_vc = _vif_data["VIF"].values[::-1]
-_vn = _vif_data["Feature"].values[::-1]
-_vcol = ["#D7191C" if v > 10 else ("#F4A582" if v > 5 else "#2166AC") for v in _vc]
-ax.barh(range(len(_vn)), _vc, color=_vcol, alpha=0.85)
-ax.axvline(5,  color="orange", lw=1.5, ls="--", label="VIF=5 (moderate)")
-ax.axvline(10, color="red",    lw=1.5, ls="--", label="VIF=10 (high)")
-ax.set_yticks(range(len(_vn))); ax.set_yticklabels(_vn, fontsize=9)
-ax.set_xlabel("Variance Inflation Factor (VIF)")
-ax.set_title("Multicollinearity Check — VIF per Feature", fontweight="bold")
-ax.legend(fontsize=9); ax.grid(alpha=0.3, axis="x")
-plt.tight_layout(); savefig("vif_multicollinearity.png")
-
-_vif_data.to_csv(os.path.join(OUT_DIR, "vif_analysis.csv"), index=False)
-print(f"  ✔ vif_analysis.csv saved")
-
-
-# ════ §2 DATA VISUALIZATION / EDA ══════════════════════════════
-section("§2  Data Visualization — EDA")
-
-# ── 2.1 FOV Distribution (Histogram + Q-Q + KDE) ───────────────
-from scipy.stats import probplot, gaussian_kde
-
-fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-
-axes[0].hist(y_all, bins=55, color=PALETTE[0], alpha=0.82,
-             edgecolor="white", linewidth=0.5)
-axes[0].axvline(np.mean(y_all), color="crimson", ls="--", lw=2,
-                label=f"Mean={np.mean(y_all):.1f} kV")
-axes[0].axvline(np.median(y_all), color="darkorange", ls=":", lw=2,
-                label=f"Median={np.median(y_all):.1f} kV")
-axes[0].set(xlabel="FOV (kV)", ylabel="Frequency",
-            title=f"FOV Distribution  (n={len(y_all)}, SD={np.std(y_all):.1f} kV)")
-axes[0].legend(); axes[0].grid(alpha=0.3)
-
-probplot(y_all, plot=axes[1])
-axes[1].set_title("FOV Normal Q-Q Plot"); axes[1].grid(alpha=0.3)
-
-kde_x = np.linspace(y_all.min(), y_all.max(), 300)
-kde_f = gaussian_kde(y_all)
-axes[2].plot(kde_x, kde_f(kde_x), color=PALETTE[0], lw=2.5, label="KDE")
-axes[2].fill_between(kde_x, kde_f(kde_x), alpha=0.22, color=PALETTE[0])
-axes[2].set(xlabel="FOV (kV)", ylabel="Density",
-            title="FOV Kernel Density Estimation (KDE)")
-axes[2].legend(); axes[2].grid(alpha=0.3)
-
-plt.suptitle("FOV Target Variable Analysis", fontsize=14, fontweight="bold")
-plt.tight_layout(); savefig("eda_01_fov_distribution.png")
-
-# ── 2.2 Raw Feature Distributions ───────────────────────────────
-CONT_FEATS_EDA = ["CD","AD","SDD","RH","Aging","J","K"]
-fig, axes = plt.subplots(2, 4, figsize=(20, 9))
-for i, feat in enumerate(CONT_FEATS_EDA):
-    ax = axes[i//4, i%4]
-    vals = df_raw[feat].values
-    ax.hist(vals, bins=45, color=PALETTE[i % len(PALETTE)],
-            alpha=0.82, edgecolor="white", linewidth=0.5)
-    ax.axvline(np.mean(vals), color="crimson", ls="--", lw=1.5,
-               label=f"mean={np.mean(vals):.2f}")
-    ax.set(xlabel=feat, ylabel="Frequency",
-           title=f"{feat}   (median={np.median(vals):.2f})")
-    ax.legend(fontsize=8); ax.grid(alpha=0.3)
-for ax in axes[1, len(CONT_FEATS_EDA)%4:]:
-    ax.set_visible(False)
-plt.suptitle("Raw Feature Distributions", fontsize=13, fontweight="bold")
-plt.tight_layout(); savefig("eda_02_feature_histograms.png")
-
-# ── 2.3 Log Transformation Effect ───────────────────────────────
-LOG_PAIRS = [("SDD","log_SDD"),("RH","log_RH"),("CD","log_CD"),("J","log_J")]
-fig, axes = plt.subplots(2, 4, figsize=(20, 9))
-for col, (feat, lfeat) in enumerate(LOG_PAIRS):
-    raw_v = df_raw[feat].values
-    log_v = df[lfeat].values
-    r_raw = np.corrcoef(raw_v, y_all)[0,1]
-    r_log = np.corrcoef(log_v, y_all)[0,1]
-    axes[0, col].scatter(raw_v, y_all, s=5, alpha=0.35,
-                          color=PALETTE[col], linewidths=0)
-    axes[0, col].set(xlabel=feat, ylabel="FOV (kV)",
-                      title=f"FOV ~ {feat}   (r={r_raw:.3f})")
-    axes[0, col].grid(alpha=0.3)
-    axes[1, col].scatter(log_v, y_all, s=5, alpha=0.35,
-                          color=PALETTE[(col+4)%len(PALETTE)], linewidths=0)
-    m, b = np.polyfit(log_v, y_all, 1)
-    xf = np.linspace(log_v.min(), log_v.max(), 100)
-    axes[1, col].plot(xf, m*xf+b, "r-", lw=1.8,
-                       label=f"Fit (r={r_log:.3f})")
-    axes[1, col].set(xlabel=f"ln({feat})", ylabel="FOV (kV)",
-                      title=f"FOV ~ ln({feat})   (r={r_log:.3f})")
-    axes[1, col].legend(fontsize=8); axes[1, col].grid(alpha=0.3)
-plt.suptitle("Log Transformation Effect — Physical Linearization",
-             fontsize=13, fontweight="bold")
-plt.tight_layout(); savefig("eda_03_log_transform.png")
-
-# ── 2.4 Correlation Heatmap ──────────────────────────────────────
-CORR_COLS = ["CD","AD","SDD","RH","Aging","J","K",
-             "log_SDD","log_RH","log_J","log_CD","FOV"]
-df_c = df_raw[["CD","AD","SDD","RH","Aging","J","K"]].copy()
-df_c["log_SDD"] = np.log(df_raw["SDD"])
-df_c["log_RH"]  = np.log(df_raw["RH"])
-df_c["log_J"]   = np.log(df_raw["J"].clip(lower=0.5))
-df_c["log_CD"]  = np.log(df_raw["CD"])
-df_c["FOV"]     = y_all
-corr_m = df_c[CORR_COLS].corr()
-
-fig, ax = plt.subplots(figsize=(13, 10))
-mask = np.triu(np.ones_like(corr_m, dtype=bool))
-cmap_corr = sns.diverging_palette(220, 10, as_cmap=True)
-sns.heatmap(corr_m, mask=mask, annot=True, fmt=".2f",
-            cmap=cmap_corr, center=0, vmin=-1, vmax=1,
-            ax=ax, linewidths=0.5,
-            cbar_kws={"label":"Pearson r","shrink":0.8})
-ax.set_title("Feature Correlation Matrix (including FOV)",
-             fontsize=13, fontweight="bold")
-plt.tight_layout(); savefig("eda_04_correlation_heatmap.png")
-
-# ── 2.5 FOV by Sample Type ───────────────────────────────────────
-smp_vals  = df_raw["Sample"].values
-smp_uniq  = sorted(df_raw["Sample"].unique())
-smp_data  = [y_all[smp_vals==s] for s in smp_uniq]
-smp_cnts  = [len(d) for d in smp_data]
-sort_idx  = np.argsort([np.median(d) for d in smp_data])
-s_data    = [smp_data[i] for i in sort_idx]
-s_names   = [smp_uniq[i] for i in sort_idx]
-s_cnts    = [smp_cnts[i] for i in sort_idx]
-
-fig, axes = plt.subplots(1, 2, figsize=(18, 6))
-bp = axes[0].boxplot(s_data, patch_artist=True, notch=False,
-                      medianprops=dict(color="black", lw=2))
-for patch, col in zip(bp["boxes"], PALETTE*10):
-    patch.set_facecolor(col); patch.set_alpha(0.78)
-axes[0].set_xticks(range(1, len(s_names)+1))
-axes[0].set_xticklabels(
-    [f"{n}\n(n={c})" for n,c in zip(s_names,s_cnts)],
-    rotation=55, ha="right", fontsize=7)
-axes[0].set(ylabel="FOV (kV)", title="FOV Distribution by Sample Type")
-axes[0].grid(alpha=0.3, axis="y")
-
-axes[1].barh(range(len(s_names)), s_cnts,
-             color=[PALETTE[i%len(PALETTE)] for i in range(len(s_names))],
-             alpha=0.82)
-axes[1].set_yticks(range(len(s_names)))
-axes[1].set_yticklabels(s_names, fontsize=8)
-for i, v in enumerate(s_cnts):
-    axes[1].text(v+3, i, str(v), va="center", fontsize=8)
-axes[1].set(xlabel="Number of Records",
-            title="Observations per Sample")
-axes[1].grid(alpha=0.3, axis="x")
-plt.suptitle("Sample Type Analysis", fontsize=13, fontweight="bold")
-plt.tight_layout(); savefig("eda_05_sample_analysis.png")
-
-# ── 2.6 FOV vs Key Feature Scatter Grid ─────────────────────────
-KEY_PAIRS = [("log_SDD","ln(SDD)"),("log_CD","ln(CD)"),
-             ("log_RH","ln(RH)"),("Aging","Aging"),
-             ("log_J","ln(J)"),("K","K")]
-fig, axes = plt.subplots(2, 3, figsize=(17, 11))
-for ax, (feat, xlab) in zip(axes.flat, KEY_PAIRS):
-    fv = df[feat].values if feat in df.columns else df_raw[feat].values
-    sc = ax.scatter(fv, y_all, c=y_all, cmap="plasma",
-                    s=7, alpha=0.45, linewidths=0)
-    m, b = np.polyfit(fv, y_all, 1)
-    xf = np.linspace(fv.min(), fv.max(), 100)
-    ax.plot(xf, m*xf+b, "w-", lw=2.5, alpha=0.85)
-    r = np.corrcoef(fv, y_all)[0,1]
-    ax.set(xlabel=xlab, ylabel="FOV (kV)",
-           title=f"FOV vs {xlab}   (r={r:.3f})")
-    ax.grid(alpha=0.2)
-    plt.colorbar(sc, ax=ax, fraction=0.03, pad=0.01, label="FOV (kV)")
-plt.suptitle("FOV vs Key Features (Color = FOV kV)",
-             fontsize=13, fontweight="bold")
-plt.tight_layout(); savefig("eda_06_fov_scatter_grid.png")
-
-# ── 2.7 Pair Feature Matrix ──────────────────────────────────────
-PAIR_COLS = ["log_SDD","log_CD","log_RH","Aging","FOV"]
-df_pair = df_c[PAIR_COLS].copy()
-df_pair.columns = ["ln(SDD)","ln(CD)","ln(RH)","Aging","FOV"]
-n = len(PAIR_COLS)
-fig = plt.figure(figsize=(14, 12))
-for i, ci in enumerate(df_pair.columns):
-    for j, cj in enumerate(df_pair.columns):
-        ax = fig.add_subplot(n, n, i*n+j+1)
-        if i == j:
-            ax.hist(df_pair[ci], bins=35,
-                    color=PALETTE[i%len(PALETTE)], alpha=0.8)
-        else:
-            ax.scatter(df_pair[cj], df_pair[ci], s=3,
-                       alpha=0.25, linewidths=0,
-                       color=PALETTE[(i+j)%len(PALETTE)])
-        if j == 0: ax.set_ylabel(ci, fontsize=7)
-        if i == n-1: ax.set_xlabel(cj, fontsize=7)
-        ax.tick_params(labelsize=6)
-plt.suptitle("Pair Feature Matrix (Selected Variables)",
-             fontsize=13, fontweight="bold")
-plt.tight_layout(); savefig("eda_07_pairplot_matrix.png")
-
-# ── 2.8 Descriptive Statistics Summary ───────────────────────────
-desc = df_raw[CONT_FEATS_EDA+["FOV"]].describe().round(3)
-print("\n  Descriptive Statistics (Raw Data):")
-print(desc.to_string())
-desc.to_csv(os.path.join(OUT_DIR,"eda_descriptive_stats.csv"))
-import pandas as _pd_eda
-print(f"\n  Total records   : {len(y_all)}")
-print(f"  Feature count   : {len(ALL_FEATS)}")
-print(f"  FOV range       : {y_all.min():.2f} – {y_all.max():.2f} kV")
-print(f"  FOV mean±SD   : {y_all.mean():.2f} ± {y_all.std():.2f} kV")
-print(f"  FOV skewness    : {_pd_eda.Series(y_all).skew():.3f}")
-print(f"  FOV kurtosis    : {_pd_eda.Series(y_all).kurt():.3f}")
-print(f"  Sample types    : {len(smp_uniq)} types | min={min(smp_cnts)} | max={max(smp_cnts)}")
-
-
-# ════ §3 HELPER FUNCTIONS ═════════════════════════════════════════
-def compute_metrics(yt,yp):
-    return dict(R2=float(r2_score(yt,yp)),
-                RMSE=float(np.sqrt(mean_squared_error(yt,yp))),
-                MAE=float(mean_absolute_error(yt,yp)),
-                MAPE=float(np.mean(np.abs((yt-yp)/np.where(np.abs(yt)<1e-9,1e-9,yt)))*100),
-                NSE=float(1-np.sum((yt-yp)**2)/max(np.sum((yt-np.mean(yt))**2),1e-12)))
-
-def bootstrap_ci(yt,yp,metric="R2",n_boot=None,seed=42):
-    if n_boot is None: n_boot=N_BOOT
-    rng=np.random.RandomState(seed); n=len(yt); vals=[]
-    for _ in range(n_boot):
-        i=rng.choice(n,n,replace=True); vals.append(compute_metrics(yt[i],yp[i])[metric])
-    return float(np.percentile(vals,2.5)),float(np.percentile(vals,97.5))
-
-def cliffs_delta(a,b):
-    if not len(a) or not len(b): return 0.,"n/a"
-    stat,_=mannwhitneyu(a,b,alternative="two-sided")
-    d=(2.*float(stat)/(len(a)*len(b)))-1.
-    sz="large" if abs(d)>=.474 else "medium" if abs(d)>=.33 else "small" if abs(d)>=.147 else "negligible"
-    return round(d,4),sz
-
-PHY_NAMES=["log_CD","log_AD","log_SDD","log_RH","Aging","log_J","K"]+SMP_COLS
-
-def physics_transform(X_arr):
-    d=pd.DataFrame(X_arr,columns=FN)
-    return np.column_stack([np.log(d["CD"].astype(float).values),np.log(d["AD"].astype(float).values),
-        np.log(d["SDD"].astype(float).values),np.log(d["RH"].astype(float).values),
-        d["Aging"].astype(float).values,np.log(d["J"].astype(float).clip(lower=0.5).values),
-        d["K"].astype(float).values]+[d[c].astype(float).values for c in SMP_COLS])
-
-# ════ §4 EMPIRICAL MODELS ════════════════════════════════════════
-class ObenausModel(BaseEstimator,RegressorMixin):
-    def __init__(self,alpha=0.01): self.alpha=alpha
-    def fit(self,X,y):
-        Xp=physics_transform(X); self.ridge_=Ridge(alpha=self.alpha).fit(Xp,np.log(y))
-        self.coef_dict_=dict(zip(PHY_NAMES,self.ridge_.coef_))
-        self.intercept_=float(self.ridge_.intercept_); self.n_sdd_=self.coef_dict_["log_SDD"]
-        return self
-    def predict(self,X): return np.exp(self.ridge_.predict(physics_transform(X)))
-    def validate_physics(self):
-        # FIX: six sign constraints, matching Table 4 of the manuscript.
-        # AD and J were reported in the paper but were missing from this check.
-        return {"SDD neg":self.coef_dict_["log_SDD"]<0,"RH neg":self.coef_dict_["log_RH"]<0,
-                "CD pos":self.coef_dict_["log_CD"]>0,"AD pos":self.coef_dict_["log_AD"]>0,
-                "Aging neg":self.coef_dict_["Aging"]<0,"J neg":self.coef_dict_["log_J"]<0}
-
-class RizkModel(BaseEstimator,RegressorMixin):
-    def __init__(self,alpha=0.01): self.alpha=alpha
-    def _Xr(self,X_arr):
-        d=pd.DataFrame(X_arr,columns=FN)
-        return np.column_stack([np.log(d["CD"].astype(float).values),np.log(d["SDD"].astype(float).values),
-            np.log(d["RH"].astype(float).values),d["Aging"].astype(float).values]+[d[c].astype(float).values for c in SMP_COLS])
-    def fit(self,X,y): self.ridge_=Ridge(alpha=self.alpha).fit(self._Xr(X),np.log(y)); return self
-    def predict(self,X): return np.exp(self.ridge_.predict(self._Xr(X)))
-
-# ════ §5 HPO ══════════════════════════════════════════════════════
-section("§5  HPO — Optuna + All Models (Fair Evaluation)")
-BEST_PARAMS={}
-
-# ── Separate holdout for HPO (seed=999) — independent from eval sets ──
-idx_hpo,_=train_test_split(idx_all,test_size=0.20,random_state=999,
-                            stratify=df["Sample"].values)
-X_hpo=X_all[idx_hpo]; y_hpo=y_all[idx_hpo]
-# Pre-scaled HPO data for Ridge / KNN / SVR / MLP
-_sc_hpo=RobustScaler().fit(X_hpo); X_hpo_sc=_sc_hpo.transform(X_hpo)
-print(f"  HPO holdout: {len(X_hpo)} records  (seed=999 — completely independent from evaluation sets)")
-
-def _make_study(seed=42):
-    return optuna.create_study(direction="maximize",
-                               sampler=optuna.samplers.TPESampler(seed=seed))
-
-# ── XGBoost ─────────────────────────────────────────────
-if HAS_XGB and not SKIP_HPO:
-    if HAS_OPTUNA:
-        print("  XGBoost Optuna starting...")
-        def xgb_obj(trial):
-            p={"n_estimators":trial.suggest_int("n",300,2000),
-               "learning_rate":trial.suggest_float("lr",0.005,0.15,log=True),
-               "max_depth":trial.suggest_int("d",4,10),
-               "subsample":trial.suggest_float("sub",0.6,1.0),
-               "colsample_bytree":trial.suggest_float("col",0.5,1.0),
-               "min_child_weight":trial.suggest_int("mcw",1,20),
-               "gamma":trial.suggest_float("gamma",0.,0.5),
-               "reg_lambda":trial.suggest_float("lam",0.01,10.,log=True),
-               "reg_alpha":trial.suggest_float("alp",0.,2.)}
-            m=xgb.XGBRegressor(**p,random_state=42,verbosity=0,n_jobs=-1,tree_method="hist")
-            return cross_val_score(m,X_hpo,y_hpo,cv=5,scoring="r2",n_jobs=-1).mean()
-        st=_make_study(); st.optimize(xgb_obj,n_trials=N_OPTUNA,n_jobs=1)
-        bp=st.best_params
-        BEST_PARAMS["XGBoost"]=xgb.XGBRegressor(
-            n_estimators=bp["n"],learning_rate=bp["lr"],max_depth=bp["d"],
-            subsample=bp["sub"],colsample_bytree=bp["col"],min_child_weight=bp["mcw"],
-            gamma=bp["gamma"],reg_lambda=bp["lam"],reg_alpha=bp["alp"],
-            random_state=42,verbosity=0,n_jobs=-1,tree_method="hist")
-        print(f"  XGBoost  Optuna CV R²={st.best_value:.4f}  trial={N_OPTUNA}")
+# ════════════════════════════════════════════════════════════════════════
+# §3  DATA-LEVEL PHYSICAL ANALYSIS  [R1-1]
+# ════════════════════════════════════════════════════════════════════════
+section("§3  Data-level physical analysis (no model involved)")
+_keys = ["Sample", "RH", "Aging", "SDD", "J", "K"]
+_mono_rows = []
+for f_ in ["SDD", "RH", "Aging", "J", "K"]:
+    if f_ in ("J", "K"):
+        oth = ["Sample", "RH", "Aging", "SDD", "K" if f_ == "J" else "J"]
+        sub = df_raw[df_raw["K"] > 0]          # J = 1 occurs only with K = 0
     else:
-        rs=RandomizedSearchCV(xgb.XGBRegressor(random_state=42,verbosity=0,n_jobs=-1,tree_method="hist"),
-            {"n_estimators":[500,800,1000,1500],"learning_rate":[0.005,0.01,0.02,0.03,0.05],
-             "max_depth":[4,5,6,7,8],"subsample":[0.6,0.7,0.8,0.9],"colsample_bytree":[0.5,0.6,0.7,0.8],
-             "min_child_weight":[1,3,5,10],"gamma":[0.,0.1,0.2],"reg_lambda":[0.1,0.5,1.,2.]},
-            n_iter=N_OPTUNA,cv=5,scoring="r2",random_state=42,n_jobs=-1)
-        rs.fit(X_hpo,y_hpo); BEST_PARAMS["XGBoost"]=clone(rs.best_estimator_)
-        print(f"  XGBoost  RandomSearch R²={rs.best_score_:.4f}")
-elif HAS_XGB:
-    BEST_PARAMS["XGBoost"]=xgb.XGBRegressor(n_estimators=1000,learning_rate=0.02,max_depth=6,
-        subsample=0.8,colsample_bytree=0.7,min_child_weight=3,gamma=0.,reg_lambda=1.,
-        random_state=42,verbosity=0,n_jobs=-1,tree_method="hist")
-    print("  XGBoost: default params (SKIP_HPO=True)")
-
-# ── LightGBM ──────────────────────────────────────────
-if HAS_LGB and not SKIP_HPO:
-    if HAS_OPTUNA:
-        print("  LightGBM Optuna starting...")
-        def lgb_obj(trial):
-            p={"n_estimators":trial.suggest_int("n",300,2000),
-               "learning_rate":trial.suggest_float("lr",0.005,0.15,log=True),
-               "num_leaves":trial.suggest_int("leaves",31,255),
-               "subsample":trial.suggest_float("sub",0.6,1.0),
-               "colsample_bytree":trial.suggest_float("col",0.5,1.0),
-               "min_child_samples":trial.suggest_int("mcs",5,100),
-               "reg_lambda":trial.suggest_float("lam",0.01,10.,log=True),
-               "reg_alpha":trial.suggest_float("alp",0.,2.)}
-            m=lgb.LGBMRegressor(**p,random_state=42,n_jobs=-1,verbose=-1)
-            return cross_val_score(m,X_hpo,y_hpo,cv=5,scoring="r2",n_jobs=-1).mean()
-        st2=_make_study(); st2.optimize(lgb_obj,n_trials=N_OPTUNA,n_jobs=1)
-        bp2=st2.best_params
-        BEST_PARAMS["LightGBM"]=lgb.LGBMRegressor(n_estimators=bp2["n"],learning_rate=bp2["lr"],
-            num_leaves=bp2["leaves"],subsample=bp2["sub"],colsample_bytree=bp2["col"],
-            min_child_samples=bp2["mcs"],reg_lambda=bp2["lam"],reg_alpha=bp2["alp"],
-            random_state=42,n_jobs=-1,verbose=-1)
-        print(f"  LightGBM Optuna CV R²={st2.best_value:.4f}")
-    else:
-        rs2=RandomizedSearchCV(lgb.LGBMRegressor(random_state=42,n_jobs=-1,verbose=-1),
-            {"n_estimators":[500,800,1000],"learning_rate":[0.005,0.01,0.02,0.03],
-             "num_leaves":[63,127,255],"subsample":[0.6,0.7,0.8],"colsample_bytree":[0.5,0.6,0.7],
-             "min_child_samples":[5,10,20],"reg_lambda":[0.1,0.5,1.]},
-            n_iter=N_OPTUNA,cv=5,scoring="r2",random_state=42,n_jobs=-1)
-        rs2.fit(X_hpo,y_hpo); BEST_PARAMS["LightGBM"]=clone(rs2.best_estimator_)
-        print(f"  LightGBM RandomSearch R²={rs2.best_score_:.4f}")
-elif HAS_LGB:
-    BEST_PARAMS["LightGBM"]=lgb.LGBMRegressor(n_estimators=1000,learning_rate=0.02,num_leaves=127,
-        subsample=0.8,colsample_bytree=0.7,min_child_samples=10,reg_lambda=1.,
-        random_state=42,n_jobs=-1,verbose=-1)
-
-# ── GBR ───────────────────────────────────────────────
-if not SKIP_HPO:
-    if HAS_OPTUNA:
-        print("  GBR Optuna starting...")
-        def gbr_obj(trial):
-            p={"n_estimators":trial.suggest_int("n",300,1500),
-               "learning_rate":trial.suggest_float("lr",0.005,0.1,log=True),
-               "max_depth":trial.suggest_int("d",3,7),
-               "subsample":trial.suggest_float("sub",0.6,1.0),
-               "min_samples_leaf":trial.suggest_int("msl",1,10),
-               "max_features":trial.suggest_float("mf",0.4,1.0)}
-            m=GradientBoostingRegressor(**p,random_state=42)
-            return cross_val_score(m,X_hpo,y_hpo,cv=5,scoring="r2",n_jobs=-1).mean()
-        st_gbr=_make_study(); st_gbr.optimize(gbr_obj,n_trials=N_OPTUNA,n_jobs=1)
-        bp_gbr=st_gbr.best_params
-        BEST_PARAMS["GBR"]=GradientBoostingRegressor(
-            n_estimators=bp_gbr["n"],learning_rate=bp_gbr["lr"],max_depth=bp_gbr["d"],
-            subsample=bp_gbr["sub"],min_samples_leaf=bp_gbr["msl"],max_features=bp_gbr["mf"],
-            random_state=42)
-        print(f"  GBR      Optuna CV R²={st_gbr.best_value:.4f}")
-    else:
-        rs_=RandomizedSearchCV(GradientBoostingRegressor(random_state=42),
-            {"n_estimators":[500,800],"learning_rate":[0.02,0.03],"max_depth":[4,5],
-             "subsample":[0.7,0.8,0.9],"min_samples_leaf":[1,2]},
-            n_iter=max(8,N_OPTUNA//8),cv=5,scoring="r2",random_state=42,n_jobs=-1)
-        rs_.fit(X_hpo,y_hpo); BEST_PARAMS["GBR"]=clone(rs_.best_estimator_)
-        print(f"  GBR      RandomSearch R²={rs_.best_score_:.4f}")
-else:
-    BEST_PARAMS["GBR"]=GradientBoostingRegressor(n_estimators=800,learning_rate=0.03,max_depth=4,
-        subsample=0.8,min_samples_leaf=2,random_state=42)
-
-# ── HistGBR ───────────────────────────────────────────
-if not SKIP_HPO:
-    if HAS_OPTUNA:
-        print("  HistGBR Optuna starting...")
-        def hgbr_obj(trial):
-            p={"max_iter":trial.suggest_int("n",300,1500),
-               "learning_rate":trial.suggest_float("lr",0.005,0.1,log=True),
-               "max_depth":trial.suggest_int("d",3,10),
-               "l2_regularization":trial.suggest_float("l2",0.0,1.0),
-               "min_samples_leaf":trial.suggest_int("msl",5,50),
-               "max_leaf_nodes":trial.suggest_int("mln",20,255)}
-            m=HistGradientBoostingRegressor(**p,random_state=42)
-            return cross_val_score(m,X_hpo,y_hpo,cv=5,scoring="r2",n_jobs=-1).mean()
-        st_hgbr=_make_study(); st_hgbr.optimize(hgbr_obj,n_trials=N_OPTUNA,n_jobs=1)
-        bp_hgbr=st_hgbr.best_params
-        BEST_PARAMS["HistGBR"]=HistGradientBoostingRegressor(
-            max_iter=bp_hgbr["n"],learning_rate=bp_hgbr["lr"],max_depth=bp_hgbr["d"],
-            l2_regularization=bp_hgbr["l2"],min_samples_leaf=bp_hgbr["msl"],
-            max_leaf_nodes=bp_hgbr["mln"],random_state=42)
-        print(f"  HistGBR  Optuna CV R²={st_hgbr.best_value:.4f}")
-    else:
-        rs_=RandomizedSearchCV(HistGradientBoostingRegressor(random_state=42),
-            {"max_iter":[500,800],"learning_rate":[0.02,0.03],"max_depth":[5,6,7,None],
-             "l2_regularization":[0.0,0.01],"min_samples_leaf":[5,10]},
-            n_iter=max(8,N_OPTUNA//8),cv=5,scoring="r2",random_state=42,n_jobs=-1)
-        rs_.fit(X_hpo,y_hpo); BEST_PARAMS["HistGBR"]=clone(rs_.best_estimator_)
-        print(f"  HistGBR  RandomSearch R²={rs_.best_score_:.4f}")
-else:
-    BEST_PARAMS["HistGBR"]=HistGradientBoostingRegressor(max_iter=500,learning_rate=0.03,max_depth=6,
-        l2_regularization=0.,min_samples_leaf=5,random_state=42)
-
-# ── RF ────────────────────────────────────────────────
-if not SKIP_HPO:
-    if HAS_OPTUNA:
-        print("  RF Optuna starting...")
-        def rf_obj(trial):
-            p={"n_estimators":trial.suggest_int("n",200,800),
-               "min_samples_leaf":trial.suggest_int("msl",1,10),
-               "max_features":trial.suggest_float("mf",0.3,0.9),
-               "min_samples_split":trial.suggest_int("mss",2,10)}
-            m=RandomForestRegressor(**p,n_jobs=-1,random_state=42)
-            return cross_val_score(m,X_hpo,y_hpo,cv=5,scoring="r2",n_jobs=-1).mean()
-        st_rf=_make_study(); st_rf.optimize(rf_obj,n_trials=N_OPTUNA,n_jobs=1)
-        bp_rf=st_rf.best_params
-        BEST_PARAMS["RF"]=RandomForestRegressor(
-            n_estimators=bp_rf["n"],min_samples_leaf=bp_rf["msl"],max_features=bp_rf["mf"],
-            min_samples_split=bp_rf["mss"],n_jobs=-1,random_state=42)
-        print(f"  RF       Optuna CV R²={st_rf.best_value:.4f}")
-    else:
-        rs_=RandomizedSearchCV(RandomForestRegressor(n_jobs=-1,random_state=42),
-            {"n_estimators":[400,500],"min_samples_leaf":[1,2],"max_features":[0.5,0.6]},
-            n_iter=max(8,N_OPTUNA//8),cv=5,scoring="r2",random_state=42,n_jobs=-1)
-        rs_.fit(X_hpo,y_hpo); BEST_PARAMS["RF"]=clone(rs_.best_estimator_)
-        print(f"  RF       RandomSearch R²={rs_.best_score_:.4f}")
-else:
-    BEST_PARAMS["RF"]=RandomForestRegressor(n_estimators=400,min_samples_leaf=1,
-        max_features=0.6,n_jobs=-1,random_state=42)
-
-# ── Extra Trees ──────────────────────────────────────────
-if not SKIP_HPO:
-    if HAS_OPTUNA:
-        print("  Extra Trees Optuna starting...")
-        def et_obj(trial):
-            p={"n_estimators":trial.suggest_int("n",200,800),
-               "min_samples_leaf":trial.suggest_int("msl",1,10),
-               "max_features":trial.suggest_float("mf",0.3,0.9),
-               "min_samples_split":trial.suggest_int("mss",2,10)}
-            m=ExtraTreesRegressor(**p,n_jobs=-1,random_state=42)
-            return cross_val_score(m,X_hpo,y_hpo,cv=5,scoring="r2",n_jobs=-1).mean()
-        st_et=_make_study(); st_et.optimize(et_obj,n_trials=N_OPTUNA,n_jobs=1)
-        bp_et=st_et.best_params
-        BEST_PARAMS["Extra Trees"]=ExtraTreesRegressor(
-            n_estimators=bp_et["n"],min_samples_leaf=bp_et["msl"],max_features=bp_et["mf"],
-            min_samples_split=bp_et["mss"],n_jobs=-1,random_state=42)
-        print(f"  ExtraTrees Optuna CV R²={st_et.best_value:.4f}")
-    else:
-        rs_=RandomizedSearchCV(ExtraTreesRegressor(n_jobs=-1,random_state=42),
-            {"n_estimators":[300,400,500],"min_samples_leaf":[1,2,3],"max_features":[0.4,0.5,0.6]},
-            n_iter=max(8,N_OPTUNA//8),cv=5,scoring="r2",random_state=42,n_jobs=-1)
-        rs_.fit(X_hpo,y_hpo); BEST_PARAMS["Extra Trees"]=clone(rs_.best_estimator_)
-        print(f"  ExtraTrees RandomSearch R²={rs_.best_score_:.4f}")
-else:
-    BEST_PARAMS["Extra Trees"]=ExtraTreesRegressor(n_estimators=300,min_samples_leaf=2,
-        max_features=0.5,n_jobs=-1,random_state=42)
-
-# ── Ridge ───────────────────────────────────────────────
-if not SKIP_HPO:
-    if HAS_OPTUNA:
-        print("  Ridge Optuna starting...")
-        def ridge_obj(trial):
-            alpha=trial.suggest_float("alpha",1e-3,100.,log=True)
-            return cross_val_score(Ridge(alpha=alpha),X_hpo_sc,y_hpo,cv=5,scoring="r2",n_jobs=-1).mean()
-        st_ridge=_make_study(); st_ridge.optimize(ridge_obj,n_trials=N_OPTUNA,n_jobs=1)
-        BEST_PARAMS["Ridge"]=Ridge(alpha=st_ridge.best_params["alpha"])
-        print(f"  Ridge    Optuna CV R²={st_ridge.best_value:.4f}  alpha={st_ridge.best_params['alpha']:.4f}")
-    else:
-        rs_=RandomizedSearchCV(Ridge(),{"alpha":np.logspace(-3,2,50).tolist()},
-            n_iter=min(50,N_OPTUNA),cv=5,scoring="r2",random_state=42,n_jobs=-1)
-        rs_.fit(X_hpo_sc,y_hpo); BEST_PARAMS["Ridge"]=clone(rs_.best_estimator_)
-        print(f"  Ridge    RandomSearch R²={rs_.best_score_:.4f}")
-else:
-    BEST_PARAMS["Ridge"]=Ridge(alpha=1.)
-
-# ── Decision Tree ────────────────────────────────────────
-if not SKIP_HPO:
-    if HAS_OPTUNA:
-        print("  Decision Tree Optuna starting...")
-        def dt_obj(trial):
-            p={"max_depth":trial.suggest_int("d",3,20),
-               "min_samples_leaf":trial.suggest_int("msl",1,20),
-               "min_samples_split":trial.suggest_int("mss",2,20),
-               "max_features":trial.suggest_categorical("mf",["sqrt","log2",None,0.5,0.7,0.9])}
-            m=DecisionTreeRegressor(**p,random_state=42)
-            return cross_val_score(m,X_hpo,y_hpo,cv=5,scoring="r2",n_jobs=-1).mean()
-        st_dt=_make_study(); st_dt.optimize(dt_obj,n_trials=N_OPTUNA,n_jobs=1)
-        bp_dt=st_dt.best_params
-        BEST_PARAMS["Decision Tree"]=DecisionTreeRegressor(
-            max_depth=bp_dt["d"],min_samples_leaf=bp_dt["msl"],
-            min_samples_split=bp_dt["mss"],max_features=bp_dt["mf"],random_state=42)
-        print(f"  DecTree  Optuna CV R²={st_dt.best_value:.4f}")
-    else:
-        rs_=RandomizedSearchCV(DecisionTreeRegressor(random_state=42),
-            {"max_depth":list(range(3,20)),"min_samples_leaf":list(range(1,15)),
-             "max_features":["sqrt","log2",None,0.5,0.7]},
-            n_iter=max(8,N_OPTUNA//8),cv=5,scoring="r2",random_state=42,n_jobs=-1)
-        rs_.fit(X_hpo,y_hpo); BEST_PARAMS["Decision Tree"]=clone(rs_.best_estimator_)
-        print(f"  DecTree  RandomSearch R²={rs_.best_score_:.4f}")
-else:
-    BEST_PARAMS["Decision Tree"]=DecisionTreeRegressor(max_depth=12,min_samples_leaf=5,random_state=42)
-
-# ── KNN ───────────────────────────────────────────────
-if not SKIP_HPO:
-    if HAS_OPTUNA:
-        print("  KNN Optuna starting...")
-        def knn_obj(trial):
-            p={"n_neighbors":trial.suggest_int("k",2,20),
-               "weights":trial.suggest_categorical("w",["uniform","distance"]),
-               "p":trial.suggest_int("p",1,2)}
-            return cross_val_score(KNeighborsRegressor(**p),X_hpo_sc,y_hpo,cv=5,scoring="r2",n_jobs=-1).mean()
-        st_knn=_make_study(); st_knn.optimize(knn_obj,n_trials=N_OPTUNA,n_jobs=1)
-        bp_knn=st_knn.best_params
-        BEST_PARAMS["KNN"]=KNeighborsRegressor(n_neighbors=bp_knn["k"],weights=bp_knn["w"],p=bp_knn["p"])
-        print(f"  KNN      Optuna CV R²={st_knn.best_value:.4f}  k={bp_knn['k']}")
-    else:
-        rs_=RandomizedSearchCV(KNeighborsRegressor(),
-            {"n_neighbors":list(range(2,20)),"weights":["uniform","distance"],"p":[1,2]},
-            n_iter=min(30,N_OPTUNA),cv=5,scoring="r2",random_state=42,n_jobs=-1)
-        rs_.fit(X_hpo_sc,y_hpo); BEST_PARAMS["KNN"]=clone(rs_.best_estimator_)
-        print(f"  KNN      RandomSearch R²={rs_.best_score_:.4f}")
-else:
-    BEST_PARAMS["KNN"]=KNeighborsRegressor(n_neighbors=5,weights="distance")
-
-# ── SVR ───────────────────────────────────────────────
-if not SKIP_HPO:
-    if HAS_OPTUNA:
-        print("  SVR Optuna starting...")
-        def svr_obj(trial):
-            p={"C":trial.suggest_float("C",0.1,1000.,log=True),
-               "gamma":trial.suggest_categorical("gamma",["scale","auto"]),
-               "epsilon":trial.suggest_float("eps",0.001,1.,log=True)}
-            return cross_val_score(SVR(kernel="rbf",**p),X_hpo_sc,y_hpo,cv=5,scoring="r2",n_jobs=-1).mean()
-        st_svr=_make_study(); st_svr.optimize(svr_obj,n_trials=N_OPTUNA,n_jobs=1)
-        bp_svr=st_svr.best_params
-        BEST_PARAMS["SVR"]=SVR(kernel="rbf",C=bp_svr["C"],gamma=bp_svr["gamma"],epsilon=bp_svr["eps"])
-        print(f"  SVR      Optuna CV R²={st_svr.best_value:.4f}  C={bp_svr['C']:.2f}")
-    else:
-        rs_=RandomizedSearchCV(SVR(kernel="rbf"),
-            {"C":np.logspace(-1,3,50).tolist(),"gamma":["scale","auto"],
-             "epsilon":[0.001,0.01,0.05,0.1,0.5]},
-            n_iter=min(30,N_OPTUNA),cv=5,scoring="r2",random_state=42,n_jobs=-1)
-        rs_.fit(X_hpo_sc,y_hpo); BEST_PARAMS["SVR"]=clone(rs_.best_estimator_)
-        print(f"  SVR      RandomSearch R²={rs_.best_score_:.4f}")
-else:
-    BEST_PARAMS["SVR"]=SVR(kernel="rbf",C=100,gamma="scale",epsilon=0.05)
-
-# ── MLP ───────────────────────────────────────────────
-_arch_choices=[(64,32),(128,64),(128,64,32),(256,128,64),(256,128,64,32),(128,64,32,16)]
-if not SKIP_HPO:
-    if HAS_OPTUNA:
-        print("  MLP Optuna starting...")
-        def mlp_obj(trial):
-            arch=trial.suggest_categorical("arch",list(range(len(_arch_choices))))
-            p={"hidden_layer_sizes":_arch_choices[arch],
-               "alpha":trial.suggest_float("alpha",1e-5,1e-2,log=True),
-               "learning_rate_init":trial.suggest_float("lr",1e-4,1e-2,log=True),
-               "batch_size":trial.suggest_categorical("bs",[32,64,128,"auto"])}
-            m=MLPRegressor(**p,max_iter=500,early_stopping=True,random_state=42)
-            return cross_val_score(m,X_hpo_sc,y_hpo,cv=5,scoring="r2",n_jobs=-1).mean()
-        st_mlp=_make_study(); st_mlp.optimize(mlp_obj,n_trials=N_OPTUNA,n_jobs=1)
-        bp_mlp=st_mlp.best_params
-        BEST_PARAMS["MLP"]={"hidden_layer_sizes":_arch_choices[bp_mlp["arch"]],
-                             "alpha":bp_mlp["alpha"],"learning_rate_init":bp_mlp["lr"],
-                             "batch_size":bp_mlp["bs"]}
-        print(f"  MLP      Optuna CV R²={st_mlp.best_value:.4f}  arch={_arch_choices[bp_mlp['arch']]}")
-    else:
-        best_r2_mlp=-np.inf; best_bp_mlp={}
-        for _hs in [(64,32),(128,64),(128,64,32)]:
-            for _al in [1e-4,1e-3]:
-                _m=MLPRegressor(hidden_layer_sizes=_hs,alpha=_al,max_iter=500,early_stopping=True,random_state=42)
-                _r2=cross_val_score(_m,X_hpo_sc,y_hpo,cv=5,scoring="r2",n_jobs=-1).mean()
-                if _r2>best_r2_mlp: best_r2_mlp=_r2; best_bp_mlp={"hidden_layer_sizes":_hs,"alpha":_al,"learning_rate_init":0.001,"batch_size":"auto"}
-        BEST_PARAMS["MLP"]=best_bp_mlp
-        print(f"  MLP      GridSearch R²={best_r2_mlp:.4f}")
-else:
-    BEST_PARAMS["MLP"]={"hidden_layer_sizes":(128,64,32),"alpha":1e-4,"learning_rate_init":0.001,"batch_size":"auto"}
-
-print(f"\n  ✔ {len(BEST_PARAMS)} models optimized: {list(BEST_PARAMS.keys())}")
-
-
-# ════ §6 HyPhysML CLASS ═══════════════════════════════════════════
-class HyPhysML(BaseEstimator,RegressorMixin):
-    """
-    HyPhysML ULTIMATE
-    ══════════════════
-    Core: XGBoost(Optuna) + LightGBM(Optuna) + GBR + HGBR + RF + ET + KNN
-              → Ridge meta (5-fold OOF)
-    Physics: ObenausModel → interpretation (n_SDD coefficient validation)
-
-    Base learners + Ridge meta-learner + Obenaus interpretation layer
-    """
-    def __init__(self,n_folds=5,random_state=42):
-        self.n_folds=n_folds; self.random_state=random_state
-
-    def _make_base(self,seed):
-        bls={}
-        def _clone_with_seed(bp,default):
-            try:
-                m=clone(bp) if bp is not None else default
-            except Exception:
-                m=default
-            try:
-                p=m.get_params()
-                if "random_state" in p: m.set_params(random_state=seed)
-            except: pass
-            return m
-        if HAS_XGB:
-            bls["XGBoost"]=_clone_with_seed(BEST_PARAMS.get("XGBoost"),
-                xgb.XGBRegressor(n_estimators=1000,learning_rate=0.02,max_depth=6,
-                    subsample=0.8,colsample_bytree=0.7,min_child_weight=3,gamma=0.,
-                    reg_lambda=1.,random_state=seed,verbosity=0,n_jobs=-1,tree_method="hist"))
-        if HAS_LGB:
-            bls["LightGBM"]=_clone_with_seed(BEST_PARAMS.get("LightGBM"),
-                lgb.LGBMRegressor(n_estimators=1000,learning_rate=0.02,num_leaves=127,
-                    subsample=0.8,colsample_bytree=0.7,min_child_samples=10,reg_lambda=1.,
-                    random_state=seed,n_jobs=-1,verbose=-1))
-        bls["GBR"]=_clone_with_seed(BEST_PARAMS.get("GBR"),
-            GradientBoostingRegressor(n_estimators=800,learning_rate=0.03,max_depth=4,
-                subsample=0.8,min_samples_leaf=2,random_state=seed))
-        bls["HistGBR"]=_clone_with_seed(BEST_PARAMS.get("HistGBR"),
-            HistGradientBoostingRegressor(max_iter=500,learning_rate=0.03,max_depth=6,
-                l2_regularization=0.,min_samples_leaf=5,random_state=seed))
-        bls["RF"]=_clone_with_seed(BEST_PARAMS.get("RF"),
-            RandomForestRegressor(n_estimators=400,min_samples_leaf=1,max_features=0.6,n_jobs=-1,random_state=seed))
-        bls["ET"]=_clone_with_seed(BEST_PARAMS.get("Extra Trees"),ExtraTreesRegressor(n_estimators=400,min_samples_leaf=1,max_features=0.5,n_jobs=-1,random_state=seed))
-        bls["KNN"]=Pipeline([("sc",RobustScaler()),("m",KNeighborsRegressor(n_neighbors=3,weights="distance"))])
-        return bls
-
-    def fit(self,X,y):
-        rs=self.random_state; kf=KFold(n_splits=self.n_folds,shuffle=True,random_state=rs)
-        bls=self._make_base(rs); nb=len(bls); n=len(y); oof=np.zeros((n,nb))
-        for bi,(nm_,bl_) in enumerate(bls.items()):
-            for ti,vi in kf.split(X):
-                try: oof[vi,bi]=clone(bl_).fit(X[ti],y[ti]).predict(X[vi])
-                except Exception as e: print(f"  OOF {nm_}: {e}")
-        self.meta_=Ridge(alpha=0.1).fit(oof,y)
-        self.bl_fit_={nm_:clone(bl_).fit(X,y) for nm_,bl_ in bls.items()}
-        self.meta_weights_=self.meta_.coef_; self.meta_names_=list(bls.keys())
-        self.pm_=ObenausModel(alpha=0.01).fit(X,y)
-        self.physics_coef_=self.pm_.coef_dict_; self.n_sdd_=self.pm_.n_sdd_
-        return self
-
-    def predict(self,X):
-        te=np.zeros((len(X),len(self.bl_fit_)))
-        for bi,(nm_,bl_) in enumerate(self.bl_fit_.items()):
-            try: te[:,bi]=bl_.predict(X)
-            except: te[:,bi]=np.mean(y_all)
-        return self.meta_.predict(te)
-
-# ════ §7 MODEL ZOO + 10-SEED ══════════════════════════════════════
-section("§7  Model Zoo + 10-Seed Training")
-
-def get_model(name,seed):
-    def cs(bp,default):
-        try:
-            m=clone(bp) if bp is not None else default
-        except Exception:
-            m=default
-        try:
-            p=m.get_params()
-            if "random_state" in p: m.set_params(random_state=seed)
-        except: pass
-        return m
-    mlp_p=BEST_PARAMS.get("MLP",{"hidden_layer_sizes":(128,64,32),"alpha":1e-4,"learning_rate_init":0.001,"batch_size":"auto"})
-    d={"Obenaus":ObenausModel(),"Rizk":RizkModel(),
-       "Ridge":Pipeline([("sc",RobustScaler()),("m",cs(BEST_PARAMS.get("Ridge"),Ridge(alpha=1.)))]),
-       "Decision Tree":cs(BEST_PARAMS.get("Decision Tree"),DecisionTreeRegressor(max_depth=12,min_samples_leaf=5,random_state=seed)),
-       "KNN":Pipeline([("sc",RobustScaler()),("m",cs(BEST_PARAMS.get("KNN"),KNeighborsRegressor(n_neighbors=5,weights="distance")))]),
-       "Extra Trees":cs(BEST_PARAMS.get("Extra Trees"),ExtraTreesRegressor(n_estimators=300,min_samples_leaf=2,max_features=0.5,n_jobs=-1,random_state=seed)),
-       "GBR":cs(BEST_PARAMS.get("GBR"),GradientBoostingRegressor(n_estimators=800,learning_rate=0.03,max_depth=4,subsample=0.8,min_samples_leaf=2,random_state=seed)),
-       "HistGBR":cs(BEST_PARAMS.get("HistGBR"),HistGradientBoostingRegressor(max_iter=500,learning_rate=0.03,max_depth=6,l2_regularization=0.,min_samples_leaf=5,random_state=seed)),
-       "RF":cs(BEST_PARAMS.get("RF"),RandomForestRegressor(n_estimators=400,min_samples_leaf=1,max_features=0.6,n_jobs=-1,random_state=seed)),
-       "SVR":Pipeline([("sc",RobustScaler()),("m",cs(BEST_PARAMS.get("SVR"),SVR(kernel="rbf",C=100,gamma="scale",epsilon=0.05)))]),
-       "MLP":Pipeline([("sc",RobustScaler()),("m",MLPRegressor(**mlp_p,max_iter=500,early_stopping=True,random_state=seed))]),
-       "HyPhysML":HyPhysML(random_state=seed)}
-    if HAS_XGB: d["XGBoost"]=cs(BEST_PARAMS.get("XGBoost"),xgb.XGBRegressor(n_estimators=1000,learning_rate=0.02,max_depth=6,subsample=0.8,colsample_bytree=0.7,random_state=seed,verbosity=0,n_jobs=-1,tree_method="hist"))
-    if HAS_LGB: d["LightGBM"]=cs(BEST_PARAMS.get("LightGBM"),lgb.LGBMRegressor(n_estimators=1000,learning_rate=0.02,num_leaves=127,subsample=0.8,random_state=seed,n_jobs=-1,verbose=-1))
-    return d.get(name,d["GBR"])
-
-MODEL_NAMES=(["Obenaus","Rizk","Ridge","Decision Tree","KNN",
-              "Extra Trees","GBR","HistGBR","RF","SVR","MLP","HyPhysML"]
-             +(["XGBoost"] if HAS_XGB else [])
-             +(["LightGBM"] if HAS_LGB else []))
-print(f"  {len(MODEL_NAMES)} model: {', '.join(MODEL_NAMES)}")
-
-all_res=[]; preds_s42={}
-for si,seed in enumerate(SEEDS):
-    print(f"  Seed {seed:>5} ({si+1}/{len(SEEDS)})",end="  ")
-    idx_tr,idx_te=train_test_split(idx_all,test_size=TEST_SIZE,random_state=seed,stratify=df["Sample"].values)
-    Xtr,Xte=X_all[idx_tr],X_all[idx_te]; ytr,yte=y_all[idx_tr],y_all[idx_te]
-    for name in MODEL_NAMES:
-        model=get_model(name,seed); t0=time.time()
-        try:
-            model.fit(Xtr,ytr); yp=model.predict(Xte)
-        except Exception as e: print(f"\n  [{name}] {e}"); continue
-        m=compute_metrics(yte,yp); m.update({"Model":name,"Seed":seed,"Time_s":round(time.time()-t0,3)})
-        all_res.append(m)
-        if seed==42: preds_s42[name]=(model,yp,yte,Xtr,Xte,ytr)
-        print(".",end="",flush=True)
-    print()
-
-res_df=pd.DataFrame(all_res)
-agg=(res_df.groupby("Model").agg(
-    R2_mean=("R2","mean"),R2_std=("R2","std"),
-    RMSE_mean=("RMSE","mean"),RMSE_std=("RMSE","std"),
-    MAE_mean=("MAE","mean"),MAE_std=("MAE","std"),
-    MAPE_mean=("MAPE","mean"),MAPE_std=("MAPE","std"),
-    NSE_mean=("NSE","mean"),NSE_std=("NSE","std")).round(5)
-     .sort_values("R2_mean",ascending=False))
-
-BEST=agg.index[0]
-if BEST not in preds_s42: BEST=list(preds_s42.keys())[0]
-print(f"\n  ★ Best model: {BEST}  R²={agg.R2_mean.iloc[0]:.4f}")
-print(f"\n  {'Model':<20} {'Test R² (mean±std)':>22}")
-print("  "+"-"*45)
-for nm in agg.index[:10]:
-    r=agg.loc[nm]; mk="★ " if nm==BEST else "  "
-    print(f"  {mk}{nm:<20}  {r.R2_mean:.4f}±{r.R2_std:.4f}")
-
-res_df.to_csv(os.path.join(OUT_DIR,"results_all_seeds.csv"),index=False)
-agg.to_csv(os.path.join(OUT_DIR,"results_summary.csv"))
-
-# ── §7.4  5-Fold CV Scores for all models (seed=42) ──────────────
-section("§7.4  5-Fold Cross-Validation Scores")
-_cv_rows = []
-print(f"\n  {'Model':<20} {'CV R² mean':>12} {'CV R² std':>11}")
-print("  " + "-"*46)
-for name in MODEL_NAMES:
-    try:
-        _m_cv = get_model(name, 42)
-        _cv_sc = cross_val_score(_m_cv, X_all, y_all, cv=5, scoring="r2", n_jobs=-1)
-        _cv_rows.append({"Model": name,
-                          "CV_R2_mean": round(float(_cv_sc.mean()), 5),
-                          "CV_R2_std":  round(float(_cv_sc.std()),  5)})
-        print(f"  {'★ ' if name==BEST else '  '}{name:<20} {_cv_sc.mean():>12.4f} {_cv_sc.std():>11.4f}")
-    except Exception as e:
-        print(f"  {name:<20} SKIPPED ({e})")
-
-_cv_df = pd.DataFrame(_cv_rows).sort_values("CV_R2_mean", ascending=False)
-_cv_df.to_csv(os.path.join(OUT_DIR, "cv_scores.csv"), index=False)
-print(f"  ✔ cv_scores.csv saved")
-
-# ── §7.5  Train vs Test R² + Overfitting Check ────────────────────
-section("§7.5  Train vs Test R² — Overfitting Check")
-_train_res = []
-for si, seed in enumerate(SEEDS):
-    idx_tr, idx_te = train_test_split(idx_all, test_size=TEST_SIZE,
-                                       random_state=seed, stratify=df["Sample"].values)
-    Xtr_, Xte_ = X_all[idx_tr], X_all[idx_te]
-    ytr_, yte_ = y_all[idx_tr], y_all[idx_te]
-    for name in MODEL_NAMES:
-        model = get_model(name, seed)
-        try:
-            model.fit(Xtr_, ytr_)
-            r2_tr = r2_score(ytr_, model.predict(Xtr_))
-            r2_te = r2_score(yte_, model.predict(Xte_))
-            _train_res.append({"Model": name, "Seed": seed,
-                                "R2_train": r2_tr, "R2_test": r2_te,
-                                "Overfit_gap": r2_tr - r2_te})
-        except: pass
-
-_tr_df = pd.DataFrame(_train_res)
-_tr_agg = (_tr_df.groupby("Model")
-           .agg(R2_train_mean=("R2_train","mean"),
-                R2_test_mean=("R2_test","mean"),
-                Overfit_gap_mean=("Overfit_gap","mean"))
-           .round(4).sort_values("R2_test_mean", ascending=False))
-
-print(f"\n  {'Model':<20} {'Train R²':>10} {'Test R²':>10} {'Gap':>8}")
-print("  " + "-"*52)
-for nm, row in _tr_agg.iterrows():
-    flag = "⚠" if row["Overfit_gap_mean"] > 0.05 else "  "
-    print(f"  {flag} {nm:<20} {row['R2_train_mean']:>10.4f} {row['R2_test_mean']:>10.4f} {row['Overfit_gap_mean']:>8.4f}")
-
-# Train vs Test bar chart
-_ord2 = _tr_agg.index.tolist()
-_x2 = np.arange(len(_ord2)); _w = 0.38
-fig, ax = plt.subplots(figsize=(max(12, len(_ord2)), 5))
-ax.bar(_x2 - _w/2, _tr_agg["R2_train_mean"].values, _w,
-       color="#2166AC", alpha=0.82, label="Train R²")
-ax.bar(_x2 + _w/2, _tr_agg["R2_test_mean"].values,  _w,
-       color="#D7191C", alpha=0.82, label="Test R²")
-ax.set_xticks(_x2); ax.set_xticklabels(_ord2, rotation=45, ha="right", fontsize=9)
-ax.set_ylabel("R²"); ax.set_ylim(0, 1.05)
-ax.set_title("Train vs Test R² — Overfitting Diagnostic (10-seed mean)", fontweight="bold")
-ax.legend(fontsize=10); ax.grid(alpha=0.3, axis="y")
-plt.tight_layout(); savefig("train_vs_test_r2.png")
-
-# ── §7.6  Computation Time ─────────────────────────────────────────
-section("§7.6  Computation Time per Model")
-_time_agg = (res_df.groupby("Model")["Time_s"]
-             .agg(["mean","std"]).round(3)
-             .sort_values("mean", ascending=True))
-
-fig, ax = plt.subplots(figsize=(max(10, len(_time_agg)), 5))
-_xc = np.arange(len(_time_agg))
-_bars = ax.bar(_xc, _time_agg["mean"].values,
-               yerr=_time_agg["std"].values,
-               color=[PALETTE[i % len(PALETTE)] for i in range(len(_time_agg))],
-               alpha=0.85, capsize=4,
-               error_kw=dict(ecolor="black", lw=1.2))
-ax.set_xticks(_xc)
-ax.set_xticklabels(_time_agg.index.tolist(), rotation=45, ha="right", fontsize=9)
-ax.set_ylabel("Training Time (s)")
-ax.set_title("Computation Time per Model (mean ± std, 10 seeds)", fontweight="bold")
-for bar, (_, row) in zip(_bars, _time_agg.iterrows()):
-    ax.text(bar.get_x() + bar.get_width()/2,
-            bar.get_height() + row["std"] + 0.01 * _time_agg["mean"].max(),
-            f"{row['mean']:.1f}s", ha="center", fontsize=7.5, fontweight="bold")
-ax.grid(alpha=0.3, axis="y"); plt.tight_layout()
-savefig("computation_time.png")
-
-_tr_agg.to_csv(os.path.join(OUT_DIR, "train_test_r2.csv"))
-_time_agg.to_csv(os.path.join(OUT_DIR, "computation_time.csv"))
-print("  ✔ train_test_r2.csv  |  computation_time.csv  saved")
-
-# ════ §8 STATISTICAL TESTS + CI ═════════════════════════════════
-section("§8  Statistical Tests + Bootstrap CI")
-best_model,yp_best,yte,Xtr,Xte,ytr=preds_s42[BEST]
-m_best=compute_metrics(yte,yp_best)
-ci_res={}
-for nm,(mdl,yp_nm,yte_nm,*_) in preds_s42.items():
-    lo,hi=bootstrap_ci(yte_nm,yp_nm,"R2"); ci_res[nm]={"R2_lo":lo,"R2_hi":hi}
-r2_dict={n:res_df[res_df["Model"]==n]["R2"].values for n in MODEL_NAMES if n in res_df["Model"].values}
-try:
-    fr,fp=stats.friedmanchisquare(*list(r2_dict.values()))
-    print(f"  Friedman χ²={fr:.4f}  p={fp:.2e}")
-except Exception as e: print(f"  Friedman: {e}")
-r2_best_=r2_dict.get(BEST,np.zeros(len(SEEDS))); alpha_b=0.05/max(len(MODEL_NAMES)-1,1); wil_rows=[]
-for nm in MODEL_NAMES:
-    if nm==BEST: continue
-    r2_nm=r2_dict.get(nm)
-    if r2_nm is None or not len(r2_nm): continue
-    # One-sided (upper-tailed), matching directional hypothesis H1 and the
-    # manuscript. For n=10 with all differences of one sign the exact test
-    # returns its floor, p = 2**-10 = 0.000977. The two-sided counterpart would
-    # be 0.001953, which also clears alpha_b = 0.00385.
-    try: sw,pw=stats.wilcoxon(r2_best_,r2_nm,alternative="greater")
-    except: sw,pw=0,1.
-    d,sz=cliffs_delta(r2_best_,r2_nm); sig="✔" if pw<alpha_b else "n.s."
-    wil_rows.append({"vs":nm,"p":round(pw,6),"sig":sig,"cliff_delta":d,"effect":sz})
-pd.DataFrame(wil_rows).to_csv(os.path.join(OUT_DIR,"statistical_tests.csv"),index=False)
-
-# ════ §9 SENSITIVITY ANALYSIS ════════════════════════════════════
-section("§9  Sensitivity Analysis")
-NOISE_FEATS=["SDD","RH","Aging"]; NOISE_LEVELS=[0.,0.05,0.10,0.15,0.20]
-noise_res={}; rng_n=np.random.RandomState(99)
-for feat in NOISE_FEATS:
-    fi=FN.index(feat); std=Xte[:,fi].std(); noise_res[feat]={}
-    for nl in NOISE_LEVELS:
-        Xn=Xte.copy()
-        if nl>0: Xn[:,fi]+=rng_n.normal(0,nl*std,len(Xte))
-        noise_res[feat][nl]=compute_metrics(yte,best_model.predict(Xn))
-    print(f"  {feat}: R²@0%={noise_res[feat][0.]['R2']:.4f}  R²@20%={noise_res[feat][0.20]['R2']:.4f}")
-noise_rows=[{"Feature":f,"Noise_%":int(nl*100),**m} for f,d in noise_res.items() for nl,m in d.items()]
-pd.DataFrame(noise_rows).to_csv(os.path.join(OUT_DIR,"sensitivity_analysis.csv"),index=False)
-
-
-# ════ §9.5  GENERALIZABILITY — Per-Insulator-Type Performance ══════
-section("§9.5  Per-Insulator-Type Performance + Residual Analysis + Learning Curve")
-
-# ── 9.5-A  Per-tip performans (Smp_1, Smp_2, Smp_3, Smp_4) ─────────────────
-# Get sample labels for seed=42 test split
-_idx_tr42, _idx_te42 = train_test_split(
-    idx_all, test_size=TEST_SIZE, random_state=42,
-    stratify=df["Sample"].values
-)
-_Xte42 = X_all[_idx_te42]
-_yte42 = y_all[_idx_te42]
-_smp42 = df_raw["Sample"].values[_idx_te42]          # Smp_1 / Smp_2 / Smp_3 / Smp_4
-
-# Re-train HyPhysML with seed=42 (or retrieve from preds_s42)
-if "HyPhysML" in preds_s42:
-    _mdl42, _yp42, _, _Xtr42, _, _ytr42 = preds_s42["HyPhysML"]
-else:
-    _mdl42 = HyPhysML(random_state=42)
-    _ytr42 = y_all[_idx_tr42]
-    _mdl42.fit(X_all[_idx_tr42], _ytr42)
-    _yp42 = _mdl42.predict(_Xte42)
-
-_type_rows = []
-_smp_uniq  = sorted(set(_smp42))
-print(f"\n  Insulator types: {_smp_uniq}")
-print(f"  {'Type':<12} {'n_test':>6} {'R²':>8} {'RMSE (kV)':>12} {'MAE (kV)':>10} {'MAPE (%)':>10}")
-print("  " + "-"*60)
-for _smp in _smp_uniq:
-    _mask  = (_smp42 == _smp)
-    _n     = _mask.sum()
-    if _n < 5:
-        print(f"  {_smp:<12} {'N/A — insufficient samples':>40}")
-        continue
-    _m = compute_metrics(_yte42[_mask], _yp42[_mask])
-    _type_rows.append({"Insulator Type": _smp, "n_test": int(_n),
-                        "R2": _m["R2"], "RMSE": _m["RMSE"],
-                        "MAE": _m["MAE"], "MAPE": _m["MAPE"]})
-    print(f"  {_smp:<12} {_n:>6} {_m['R2']:>8.4f} {_m['RMSE']:>12.4f} {_m['MAE']:>10.4f} {_m['MAPE']:>10.3f}%")
-
-# Overall (all test samples)
-_m_all = compute_metrics(_yte42, _yp42)
-print(f"  {'OVERALL':<12} {len(_yte42):>6} {_m_all['R2']:>8.4f} {_m_all['RMSE']:>12.4f} {_m_all['MAE']:>10.4f} {_m_all['MAPE']:>10.3f}%")
-
-_type_df = pd.DataFrame(_type_rows)
-
-# ── 9.5-B  Per-type bar chart ──────────────────────────────────────────────
-if not _type_rows:
-    print("  [SKIP] Per-type chart: no insulator type has ≥5 test samples")
-else:
-    _colors = ["#2E86AB","#A23B72","#F18F01","#C73E1D"]
-    _labels = [r["Insulator Type"] for r in _type_rows]
-    _r2s    = [r["R2"]   for r in _type_rows]
-    _rmses  = [r["RMSE"] for r in _type_rows]
-    _mapes  = [r["MAPE"] for r in _type_rows]
-    fig_pt, axes_pt = plt.subplots(1, 3, figsize=(13, 4))
-    for _ax, _vals, _title, _ylab, _fmt in zip(
-            axes_pt,
-            [_r2s, _rmses, _mapes],
-            ["R² by Insulator Type", "RMSE (kV)", "MAPE (%)"],
-            ["R²", "RMSE (kV)", "MAPE (%)"],
-            [".4f", ".3f", ".2f"]):
-        _bars = _ax.bar(_labels, _vals, color=_colors[:len(_labels)], alpha=0.85, edgecolor="white")
-        for _b, _v in zip(_bars, _vals):
-            _ax.text(_b.get_x()+_b.get_width()/2, _b.get_height()+0.001*max(_vals),
-                     f"{_v:{_fmt}}", ha="center", va="bottom", fontsize=9, fontweight="bold")
-        _ax.set_title(_title, fontweight="bold", fontsize=11)
-        _ax.set_ylabel(_ylab); _ax.set_ylim(0, max(_vals)*1.15)
-        _ax.axhline(y=(_m_all["R2"] if "R²" in _title else
-                       (_m_all["RMSE"] if "RMSE" in _title else _m_all["MAPE"])),
-                    color="gray", linestyle="--", linewidth=1, alpha=0.7, label="Overall")
-        _ax.legend(fontsize=8); _ax.grid(axis="y", alpha=0.3)
-    fig_pt.suptitle("HyPhysML — Performance by Insulator Type (seed=42 test set)",
-                    fontweight="bold", fontsize=12)
-    plt.tight_layout()
-    _pt_path = os.path.join(OUT_DIR, "fig_per_type_performance.png")
-    plt.savefig(_pt_path, dpi=150, bbox_inches="tight"); plt.show()
-    print(f"  [OK] {_pt_path}")
-
-# ── 9.5-C  Residual analysis + Shapiro-Wilk normality test ─────────────────
-from scipy.stats import shapiro, probplot
-
-_residuals = _yte42 - _yp42
-_stat_sw, _p_sw = shapiro(_residuals[:5000] if len(_residuals) > 5000 else _residuals)
-
-fig_res, axes_res = plt.subplots(1, 3, figsize=(14, 4))
-
-# 1. Residual histogram
-axes_res[0].hist(_residuals, bins=40, color="#2E86AB", alpha=0.8, edgecolor="white")
-axes_res[0].axvline(0, color="red", linestyle="--", linewidth=1.5)
-axes_res[0].set_xlabel("Residual (kV)"); axes_res[0].set_ylabel("Frequency")
-axes_res[0].set_title(f"Residual Histogram\nShapiro-Wilk p={_p_sw:.4f}", fontweight="bold")
-axes_res[0].grid(alpha=0.3)
-
-# 2. Residual vs predicted
-axes_res[1].scatter(_yp42, _residuals, alpha=0.3, s=8, color="#2E86AB")
-axes_res[1].axhline(0, color="red", linestyle="--", linewidth=1.5)
-axes_res[1].set_xlabel("Predicted (kV)"); axes_res[1].set_ylabel("Residual (kV)")
-axes_res[1].set_title("Residual vs. Predicted\n(Homoscedasticity check)", fontweight="bold")
-axes_res[1].grid(alpha=0.3)
-
-# 3. Q-Q plot
-_qq_theor, _qq_sample = probplot(_residuals, dist="norm")[0]
-axes_res[2].scatter(_qq_theor, _qq_sample, alpha=0.4, s=8, color="#2E86AB")
-_lim = max(abs(_qq_theor.min()), abs(_qq_theor.max()))
-axes_res[2].plot([-_lim, _lim], [-_lim*_residuals.std(), _lim*_residuals.std()],
-                 "r--", linewidth=1.5)
-axes_res[2].set_xlabel("Theoretical Quantiles"); axes_res[2].set_ylabel("Sample Quantiles")
-axes_res[2].set_title("Normal Q-Q Plot", fontweight="bold")
-axes_res[2].grid(alpha=0.3)
-
-fig_res.suptitle("HyPhysML Residual Analysis (seed=42)", fontweight="bold", fontsize=12)
-plt.tight_layout()
-_res_path = os.path.join(OUT_DIR, "fig_residual_analysis.png")
-plt.savefig(_res_path, dpi=150, bbox_inches="tight"); plt.show()
-
-print(f"\n  Shapiro-Wilk: W={_stat_sw:.4f}, p={_p_sw:.4f}")
-print(f"  Residual mean={_residuals.mean():.4f} kV, std={_residuals.std():.4f} kV")
-print(f"  {'Normal distribution accepted (p>0.05)' if _p_sw > 0.05 else 'Normal distribution rejected (p<=0.05) — expected for large N'}")
-print(f"  [OK] {_res_path}")
-
-# ── 9.5-D  Learning curve ────────────────────────────────────────────────────
-from sklearn.model_selection import learning_curve as sk_lc
-
-print("\n  Computing learning curve (HyPhysML, 5-fold)...")
-_train_sz = np.linspace(0.10, 1.0, 8)
-_lc_tr_sz, _lc_tr_sc, _lc_val_sc = sk_lc(
-    HyPhysML(random_state=42), X_all, y_all,
-    train_sizes=_train_sz, cv=5, scoring="r2", n_jobs=-1,
-    error_score="raise"
-)
-
-_lc_tr_mean  = _lc_tr_sc.mean(axis=1)
-_lc_tr_std   = _lc_tr_sc.std(axis=1)
-_lc_val_mean = _lc_val_sc.mean(axis=1)
-_lc_val_std  = _lc_val_sc.std(axis=1)
-
-fig_lc, ax_lc = plt.subplots(figsize=(8, 5))
-ax_lc.plot(_lc_tr_sz, _lc_tr_mean,  "o-", color="#2E86AB", label="Training R²",    linewidth=2)
-ax_lc.plot(_lc_tr_sz, _lc_val_mean, "s-", color="#C73E1D", label="Validation R²",  linewidth=2)
-ax_lc.fill_between(_lc_tr_sz,
-                   _lc_tr_mean  - _lc_tr_std,  _lc_tr_mean  + _lc_tr_std,
-                   alpha=0.15, color="#2E86AB")
-ax_lc.fill_between(_lc_tr_sz,
-                   _lc_val_mean - _lc_val_std, _lc_val_mean + _lc_val_std,
-                   alpha=0.15, color="#C73E1D")
-ax_lc.set_xlabel("Number of training samples"); ax_lc.set_ylabel("R²")
-ax_lc.set_title("HyPhysML Learning Curve (5-fold CV)", fontweight="bold", fontsize=12)
-ax_lc.legend(fontsize=10); ax_lc.grid(alpha=0.3); ax_lc.set_ylim(0.85, 1.01)
-plt.tight_layout()
-_lc_path = os.path.join(OUT_DIR, "fig_learning_curve.png")
-plt.savefig(_lc_path, dpi=150, bbox_inches="tight"); plt.show()
-print(f"  Final validation R²: {_lc_val_mean[-1]:.4f} ± {_lc_val_std[-1]:.4f}")
-print(f"  [OK] {_lc_path}")
-
-# ── 9.5-E  Save to Excel ─────────────────────────────────────────────────────
-_res_summary = pd.DataFrame({
-    "Metric": ["Residual Mean (kV)", "Residual Std (kV)", "Shapiro-Wilk W", "Shapiro-Wilk p",
-               "LC Val R2 (full data)", "LC Val R2 std"],
-    "Value":  [round(_residuals.mean(),4), round(_residuals.std(),4),
-               round(float(_stat_sw),4), round(float(_p_sw),6),
-               round(float(_lc_val_mean[-1]),4), round(float(_lc_val_std[-1]),4)]
-})
-_pt_path_xl = os.path.join(OUT_DIR, "Table_PerType_Residual.xlsx")
-with pd.ExcelWriter(_pt_path_xl, engine="openpyxl") as _wr3:
-    _type_df.to_excel(_wr3, sheet_name="Per_Type_Performance", index=False)
-    _res_summary.to_excel(_wr3, sheet_name="Residual_Summary", index=False)
-print(f"  [OK] {_pt_path_xl}")
-
-
-# ════ §10-13 FIGURES ═══════════════════════════════════════════════
-section("§10-13  Figures")
-ORD=agg.index.tolist()
-
-# R² + CI + reference line
-fig,ax=plt.subplots(figsize=(max(12,len(ORD)),6))
-x=np.arange(len(ORD)); r2m=[agg.loc[m,"R2_mean"] for m in ORD]
-clo=[ci_res.get(m,{}).get("R2_lo",r2m[i]) for i,m in enumerate(ORD)]
-chi=[ci_res.get(m,{}).get("R2_hi",r2m[i]) for i,m in enumerate(ORD)]
-elo=np.maximum(0,np.array(r2m)-np.array(clo)); ehi=np.maximum(0,np.array(chi)-np.array(r2m))
-bars=ax.bar(x,r2m,color=PALETTE[:len(ORD)],alpha=0.80)
-ax.errorbar(x,r2m,yerr=[elo,ehi],fmt="none",color="black",capsize=4,lw=1.5,label="95% CI")
-for i,nm in enumerate(ORD):
-    if nm in ["Obenaus","Rizk"]: bars[i].set_hatch("///"); bars[i].set_edgecolor("black")
-    if nm in ["HyPhysML","XGBoost","LightGBM"]: bars[i].set_linewidth(2)
-ax.set_xticks(x); ax.set_xticklabels(ORD,rotation=45,ha="right",fontsize=9)
-ax.set_ylabel("R²"); ax.set_title("R² with 95% Bootstrap CI")
-ax.grid(alpha=0.3,axis="y"); plt.tight_layout(); savefig("r2_bootstrap_ci.png")
-
-# Boxplot
-fig,axes=plt.subplots(1,3,figsize=(18,6))
-for ax,(metric,ylabel) in zip(axes,[("R2","R²↑"),("RMSE","RMSE↓"),("MAPE","MAPE%↓")]):
-    data=[res_df[res_df["Model"]==m][metric].values for m in ORD if m in res_df["Model"].values]
-    bp=ax.boxplot(data,patch_artist=True,medianprops=dict(color="black",lw=2))
-    for patch,col in zip(bp["boxes"],PALETTE): patch.set_facecolor(col); patch.set_alpha(0.75)
-    ax.set_xticks(range(1,len(ORD)+1)); ax.set_xticklabels(ORD,rotation=45,ha="right",fontsize=8)
-    ax.set_ylabel(ylabel)
-    ax.grid(alpha=0.3,axis="y")
-plt.suptitle("Model Comparison (10-Seed)",fontsize=13,fontweight="bold")
-plt.tight_layout(); savefig("model_comparison_boxplot.png")
-
-# Predicted vs Actual
-resid=yte-yp_best; lo_r2=ci_res.get(BEST,{}).get("R2_lo",0); hi_r2=ci_res.get(BEST,{}).get("R2_hi",0)
-fig,axes=plt.subplots(1,2,figsize=(13,5))
-sc=axes[0].scatter(yte,yp_best,c=resid,cmap="RdBu",s=15,alpha=0.6,vmin=-5,vmax=5)
-mv,xv=min(yte.min(),yp_best.min()),max(yte.max(),yp_best.max())
-axes[0].plot([mv,xv],[mv,xv],"k--",lw=1.5)
-axes[0].set(xlabel="Actual FOV (kV)",ylabel="Predicted (kV)",
-    title=f"{BEST}\nR²={m_best['R2']:.4f} [CI:{lo_r2:.4f},{hi_r2:.4f}]  RMSE={m_best['RMSE']:.4f}")
-axes[0].grid(alpha=0.3); plt.colorbar(sc,ax=axes[0],label="Residual",fraction=0.03)
-axes[1].scatter(yp_best,resid,c=PALETTE[0],s=12,alpha=0.5)
-axes[1].axhline(0,color="k",lw=1.5,ls="--")
-for sg in [2,-2]: axes[1].axhline(sg*resid.std(),color="red",lw=1,ls=":",label=f"{sg}σ={sg*resid.std():.2f}")
-axes[1].set(xlabel="Predicted",ylabel="Residual"); axes[1].legend(); axes[1].grid(alpha=0.3)
-plt.tight_layout(); savefig("predicted_vs_actual.png")
-
-# Permutation importance
-print("  Permutation importance...")
-po=np.arange(len(FN))  # fallback order
-perm=None
-try:
-    perm=permutation_importance(best_model,Xte,yte,n_repeats=15,random_state=42,n_jobs=-1)
-    po=np.argsort(perm.importances_mean)[::-1]
-except Exception as _perm_e:
-    print(f"  [WARN] Permutation importance failed ({_perm_e}), using default feature order")
-if perm is not None:
-    fig,ax=plt.subplots(figsize=(10,7)); ti=po[:15]
-    ax.barh(range(15),perm.importances_mean[ti][::-1],xerr=perm.importances_std[ti][::-1],
-        color=[PALETTE[i%len(PALETTE)] for i in range(15)][::-1],alpha=0.8,
-        error_kw=dict(ecolor="black",capsize=3))
-    ax.set_yticks(range(15)); ax.set_yticklabels([FN[i] for i in ti][::-1])
-    ax.set(xlabel="Mean Decrease R²",title=f"Permutation Importance — {BEST}")
-    ax.grid(alpha=0.3,axis="x"); plt.tight_layout(); savefig("permutation_importance.png")
-
-# Sensitivity
-fig,axes=plt.subplots(1,3,figsize=(15,5))
-for ax,feat in zip(axes,NOISE_FEATS):
-    r2_ns=[noise_res[feat][nl]["R2"] for nl in NOISE_LEVELS]; rm_ns=[noise_res[feat][nl]["RMSE"] for nl in NOISE_LEVELS]
-    ax2=ax.twinx()
-    ax.plot([nl*100 for nl in NOISE_LEVELS],r2_ns,"o-",color=PALETTE[0],lw=2,label="R²")
-    ax2.plot([nl*100 for nl in NOISE_LEVELS],rm_ns,"s--",color=PALETTE[1],lw=2,label="RMSE")
-    ax.set(xlabel=f"{feat} Noise (%)",ylabel="R²",title=f"Robustness: {feat}")
-    ax2.set_ylabel("RMSE (kV)"); ax.legend(loc="upper left"); ax2.legend(loc="upper right")
-plt.suptitle(f"Sensitivity — {BEST}",fontsize=13,fontweight="bold")
-plt.tight_layout(); savefig("sensitivity_noise.png")
-
-# SHAP
-rng_sh=np.random.RandomState(42)
-X_bg=Xtr[rng_sh.choice(len(Xtr),min(150,len(Xtr)),replace=False)]
-X_ex=Xte[rng_sh.choice(len(Xte),min(N_SHAP,len(Xte)),replace=False)]
-shap_vals=None
-
-# For stacking models (HyPhysML), use the strongest tree base learner for SHAP
-_shap_model = best_model
-if hasattr(best_model, "bl_fit_"):
-    if "XGBoost" in best_model.bl_fit_:
-        _shap_model = best_model.bl_fit_["XGBoost"]
-    elif "LightGBM" in best_model.bl_fit_:
-        _shap_model = best_model.bl_fit_["LightGBM"]
-    elif "GBR" in best_model.bl_fit_:
-        _shap_model = best_model.bl_fit_["GBR"]
-    else:
-        _shap_model = list(best_model.bl_fit_.values())[0]
-    _shap_key = ("XGBoost" if "XGBoost" in best_model.bl_fit_ else
-                 "LightGBM" if "LightGBM" in best_model.bl_fit_ else
-                 "GBR" if "GBR" in best_model.bl_fit_ else
-                 list(best_model.bl_fit_.keys())[0])
-    print(f"  SHAP: using base learner '{_shap_key}' for HyPhysML stacking model")
-
-if HAS_SHAP:
-    try:
-        exp=shap.TreeExplainer(_shap_model); shap_vals=np.array(exp.shap_values(X_ex))
-        print("  SHAP: TreeExplainer OK")
-    except Exception as e:
-        print(f"  SHAP TreeExplainer failed ({e}), trying KernelExplainer...")
-        try:
-            exp=shap.KernelExplainer(_shap_model.predict,X_bg)
-            shap_vals=np.array(exp.shap_values(X_ex,nsamples=80,silent=True))
-            print("  SHAP: KernelExplainer OK")
-        except Exception as e2:
-            print(f"  SHAP KernelExplainer failed ({e2}), using custom approximation")
-if shap_vals is None:
-    def _kshap(model,Xb,Xe,n_p=50,rs=42):
-        rng_=np.random.RandomState(rs); nf=Xe.shape[1]; sv=np.zeros((len(Xe),nf)); bl=Xb.mean(0)
-        for i in range(len(Xe)):
-            x=Xe[i]; phi=np.zeros(nf)
-            for _ in range(n_p):
-                pm=rng_.permutation(nf); cv=bl.copy(); pp=model.predict(cv.reshape(1,-1))[0]
-                for f in pm:
-                    cv[f]=x[f]; np_=model.predict(cv.reshape(1,-1))[0]; phi[f]+=np_-pp; pp=np_
-            sv[i]=phi/n_p
-        return sv
-    shap_vals=_kshap(_shap_model,X_bg,X_ex)
-
-mabs=np.abs(shap_vals).mean(0); sord=np.argsort(mabs)[::-1]
-fig,ax=plt.subplots(figsize=(10,7)); ti=sord[:15]
-ax.barh(range(15),mabs[ti][::-1],color=[PALETTE[i%len(PALETTE)] for i in range(15)][::-1],alpha=0.85)
-ax.set_yticks(range(15)); ax.set_yticklabels([FN[i] for i in ti][::-1])
-ax.set(xlabel="Mean |SHAP| (kV)",title=f"SHAP — {BEST}"); ax.grid(alpha=0.3,axis="x")
-plt.tight_layout(); savefig("shap_bar.png")
-
-fig,ax=plt.subplots(figsize=(11,8))
-for rank,fi in enumerate(sord[:8][::-1]):
-    sv_=shap_vals[:,fi]; fv_=X_ex[:,fi]; fn_=(fv_-fv_.min())/(fv_.max()-fv_.min()+1e-9)
-    ax.scatter(sv_,rank+np.random.RandomState(fi).uniform(-0.3,0.3,len(sv_)),c=fn_,cmap="coolwarm",s=12,alpha=0.55,linewidths=0)
-ax.set_yticks(range(8)); ax.set_yticklabels([FN[i] for i in sord[:8][::-1]])
-ax.axvline(0,color="black",lw=1,ls="--"); ax.set(xlabel="SHAP (kV)",title="SHAP Beeswarm")
-ax.grid(alpha=0.3,axis="x"); plt.tight_layout(); savefig("shap_beeswarm.png")
-
-# ════ §14 HyPhysML PHYSICS INTERPRETATION ══════════════════════════
-section("§14  HyPhysML Physics Interpretation")
-idx_tr42,idx_te42=train_test_split(idx_all,test_size=TEST_SIZE,random_state=42,stratify=df["Sample"].values)
-Xtr42,Xte42=X_all[idx_tr42],X_all[idx_te42]; ytr42,yte42=y_all[idx_tr42],y_all[idx_te42]
-hyp42=HyPhysML(random_state=42); hyp42.fit(Xtr42,ytr42)
-fov42=hyp42.predict(Xte42); m_hyp42=compute_metrics(yte42,fov42)
-print(f"  HyPhysML seed=42: R²={m_hyp42['R2']:.4f}  RMSE={m_hyp42['RMSE']:.4f}")
-
-fig,axes=plt.subplots(1,2,figsize=(13,5))
-resid_h=yte42-fov42
-sc=axes[0].scatter(yte42,fov42,c=resid_h,cmap="RdBu",s=15,alpha=0.6,vmin=-5,vmax=5)
-axes[0].plot([yte42.min(),yte42.max()],[yte42.min(),yte42.max()],"k--",lw=1.5)
-axes[0].set(xlabel="Actual FOV (kV)",ylabel="Predicted (kV)",
-    title=f"HyPhysML ULTIMATE (seed=42)\nR²={m_hyp42['R2']:.4f}  RMSE={m_hyp42['RMSE']:.4f}  MAPE={m_hyp42['MAPE']:.2f}%")
-axes[0].grid(alpha=0.3); plt.colorbar(sc,ax=axes[0],label="Residual",fraction=0.03)
-axes[1].scatter(fov42,resid_h,c=PALETTE[0],s=12,alpha=0.5); axes[1].axhline(0,color="k",lw=1.5,ls="--")
-for sg in [2,-2]: axes[1].axhline(sg*resid_h.std(),color="red",lw=1,ls=":",label=f"{sg}σ={sg*resid_h.std():.2f}")
-axes[1].set(xlabel="Predicted",ylabel="Residual"); axes[1].legend(); axes[1].grid(alpha=0.3)
-plt.tight_layout(); savefig("hyphysml_predicted_vs_actual.png")
-
-fig,ax=plt.subplots(figsize=(9,4))
-mw_=hyp42.meta_weights_; mn_=hyp42.meta_names_; cc_=[PALETTE[i%len(PALETTE)] for i in range(len(mn_))]
-bars_=ax.bar(range(len(mn_)),mw_,color=cc_,alpha=0.85)
-ax.set_xticks(range(len(mn_))); ax.set_xticklabels(mn_,fontsize=10,rotation=20,ha="right")
-ax.axhline(0,color="black",lw=0.8); ax.set(ylabel="Ridge Weight",title="HyPhysML Meta-Weights")
-for b,v in zip(bars_,mw_): ax.text(b.get_x()+b.get_width()/2,v+0.003*np.sign(v) if v!=0 else 0.003,f"{v:.3f}",ha="center",fontsize=9)
-ax.grid(alpha=0.3,axis="y"); plt.tight_layout(); savefig("hyphysml_meta_weights.png")
-
-THEORETICAL={"log_SDD":(-0.35,-0.10),"log_RH":(-0.80,-0.20),"log_CD":(0.50,1.20),"Aging":(-0.05,0.00)}
-coefs_=hyp42.physics_coef_
-cs=sorted(coefs_.items(),key=lambda x:abs(x[1]),reverse=True)
-fig,ax=plt.subplots(figsize=(10,6))
-cn_=[k for k,v in cs]; cv_=[v for k,v in cs]; cc_=["#2166AC" if v>0 else "#D7191C" for v in cv_]
-ax.barh(range(len(cn_)),cv_[::-1],color=cc_[::-1],alpha=0.85)
-# FIX: bars are drawn from cv_[::-1], so feature cs[k] sits at y-position len(cs)-1-k.
-# The previous loop iterated reversed(cs) *and* mirrored the index, placing every
-# theoretical band on the wrong row (e.g. log_CD's band ended up on the log_J row).
-for k,(feat,val) in enumerate(cs):
-    if feat in THEORETICAL:
-        lo_t,hi_t=THEORETICAL[feat]
-        if isinstance(lo_t,(int,float)): ax.barh(len(cs)-1-k,hi_t-lo_t,left=lo_t,height=0.3,color="gray",alpha=0.35)
-ax.set_yticks(range(len(cn_))); ax.set_yticklabels(cn_[::-1])
-ax.axvline(0,color="black",lw=1)
-ax.set(xlabel="β (log-space)",title=f"Obenaus Coefficients (interpretation)  β₀={hyp42.pm_.intercept_:.4f}")
-ax.legend(handles=[mpatches.Patch(color="#2166AC",label="FOV↑"),mpatches.Patch(color="#D7191C",label="FOV↓"),mpatches.Patch(color="gray",alpha=0.4,label="Theoretical")])
-ax.grid(alpha=0.3,axis="x"); plt.tight_layout(); savefig("physics_coefficients.png")
-# FIX: this note quoted -0.15..-0.25, which is NOT the band used anywhere else in
-# this script; THEORETICAL["log_SDD"] is (-0.35, -0.10). The manuscript had copied
-# the stale note. Report the band actually used.
-print(f"  n_SDD={hyp42.n_sdd_:.4f}  (admissible band used here: {THEORETICAL['log_SDD'][0]} .. {THEORETICAL['log_SDD'][1]})")
-chk=hyp42.pm_.validate_physics(); print(f"  Physics checks passed: {sum(v for v in chk.values())}/{len(chk)}")
-
-# ════ §14.5  Partial Dependence Plots (PDP) ═══════════════════════
-section("§14.5  Partial Dependence Plots")
-from sklearn.inspection import PartialDependenceDisplay
-
-# Top 6 features by permutation importance
-_pdp_feats_idx = list(po[:6])
-_pdp_feat_names = [FN[i] for i in _pdp_feats_idx]
-print(f"  PDP features: {_pdp_feat_names}")
-
-# Use a fast surrogate if best_model is HyPhysML (stacking — PDP is slow)
-_pdp_model = best_model
-if hasattr(best_model, "bl_fit_"):
-    # Use the strongest base learner for PDP speed
-    if "XGBoost" in best_model.bl_fit_:
-        _pdp_model = best_model.bl_fit_["XGBoost"]
-    elif "LightGBM" in best_model.bl_fit_:
-        _pdp_model = best_model.bl_fit_["LightGBM"]
-    else:
-        _pdp_model = list(best_model.bl_fit_.values())[0]
-    print(f"  Using base learner for PDP: {list(best_model.bl_fit_.keys())[0]}")
-
-try:
-    fig, ax_pdp = plt.subplots(2, 3, figsize=(16, 9))
-    disp = PartialDependenceDisplay.from_estimator(
-        _pdp_model, Xtr42, features=_pdp_feats_idx,
-        feature_names=FN, ax=ax_pdp.ravel()[:6],
-        kind="average", subsample=500, random_state=42,
-        line_kw={"color": "#2166AC", "lw": 2.5}
-    )
-    for i, ax_ in enumerate(ax_pdp.ravel()[:6]):
-        ax_.set_title(f"PDP — {_pdp_feat_names[i]}", fontweight="bold", fontsize=11)
-        ax_.set_ylabel("Partial Dependence (FOV, kV)")
-        ax_.grid(alpha=0.3)
-    fig.suptitle(f"Partial Dependence Plots — Top 6 Features ({BEST})",
-                 fontsize=13, fontweight="bold")
-    plt.tight_layout(); savefig("pdp_top6.png")
-    print("  ✔ PDP saved")
-except Exception as e:
-    print(f"  PDP skipped: {e}")
-
-# ── ICE plots (Individual Conditional Expectation) for top 3 ──────
-try:
-    fig, ax_ice = plt.subplots(1, 3, figsize=(15, 5))
-    disp_ice = PartialDependenceDisplay.from_estimator(
-        _pdp_model, Xtr42, features=_pdp_feats_idx[:3],
-        feature_names=FN, ax=ax_ice,
-        kind="both", subsample=100, random_state=42,
-        line_kw={"color": "#2166AC", "lw": 2, "alpha": 0.8},
-        ice_lines_kw={"color": "#D7191C", "alpha": 0.08, "lw": 0.8}
-    )
-    for i, ax_ in enumerate(ax_ice):
-        ax_.set_title(f"PDP + ICE — {_pdp_feat_names[i]}", fontweight="bold", fontsize=11)
-        ax_.set_ylabel("FOV (kV)"); ax_.grid(alpha=0.3)
-    fig.suptitle(f"Individual Conditional Expectation (ICE) — Top 3 Features ({BEST})",
-                 fontsize=12, fontweight="bold")
-    plt.tight_layout(); savefig("ice_top3.png")
-    print("  ✔ ICE plots saved")
-except Exception as e:
-    print(f"  ICE skipped: {e}")
-
-# ════ §15 EXCEL REPORT ════════════════════════════════════════════
-section("§15  Excel Report")
-def fmt(m,s,d=4): return f"{m:.{d}f} ± {s:.{d}f}"
-with pd.ExcelWriter(os.path.join(OUT_DIR,"results_Q1_ULTIMATE.xlsx"),engine="openpyxl") as writer:
-    t1=[{"Model":nm,"Type":"Physics" if nm in ["Obenaus","Rizk"] else "ML",
-         "R²":fmt(agg.loc[nm,"R2_mean"],agg.loc[nm,"R2_std"]),
-         "R²[95%CI]":f"{agg.loc[nm,'R2_mean']:.4f}[{ci_res.get(nm,{}).get('R2_lo',0):.4f},{ci_res.get(nm,{}).get('R2_hi',0):.4f}]",
-         "RMSE":fmt(agg.loc[nm,"RMSE_mean"],agg.loc[nm,"RMSE_std"]),
-         "MAE":fmt(agg.loc[nm,"MAE_mean"],agg.loc[nm,"MAE_std"]),
-         "MAPE%":fmt(agg.loc[nm,"MAPE_mean"],agg.loc[nm,"MAPE_std"],d=3),
-         "NSE":fmt(agg.loc[nm,"NSE_mean"],agg.loc[nm,"NSE_std"])} for nm in agg.index]
-    pd.DataFrame(t1).to_excel(writer,sheet_name="Table1_AllModels",index=False)
-    pd.DataFrame(wil_rows).to_excel(writer,sheet_name="Table2_StatTests",index=False)
-    pd.DataFrame(noise_rows).to_excel(writer,sheet_name="Table3_Sensitivity",index=False)
-    pd.DataFrame([{"Feature":k,"β":round(v,4)} for k,v in sorted(coefs_.items(),key=lambda x:abs(x[1]),reverse=True)]).to_excel(writer,sheet_name="Table4_PhysicsCoefs",index=False)
-
-    res_df.to_excel(writer,sheet_name="Raw_AllModels",index=False)
-    _cv_df.to_excel(writer,sheet_name="Table6_CV_Scores",index=False)
-    _tr_agg.to_excel(writer,sheet_name="Table7_TrainTestR2")
-    _time_agg.to_excel(writer,sheet_name="Table8_CompTime")
-    _vif_data.to_excel(writer,sheet_name="Table9_VIF",index=False)
-print("  ✔ results_Q1_ULTIMATE.xlsx")
-
-# ── BEST_PARAMS → Excel (Table 7 — Hyperparameter reproducibility) ───────────
-# 7 base learners + Ridge meta-learner used in HyPhysML stacking
-_HYPHY_LEARNERS = ["XGBoost","LightGBM","GBR","HistGBR","RF","Extra Trees","KNN","Ridge"]
-_SKIP_PARAMS    = {"random_state","verbosity","n_jobs","verbose","tree_method","nthread"}
-
-# Extract (parameter name, optimal value) pairs for each model
-_hpo_rows = []
-for _nm in _HYPHY_LEARNERS:
-    _obj = BEST_PARAMS.get(_nm)
-    if _obj is None:
-        _hpo_rows.append({"Learner":_nm,"Parameter":"—","Type":"—","Optimal Value":"Optuna not run"})
-        continue
-    if isinstance(_obj, dict):
-        _params = _obj
-    else:
-        try:    _params = _obj.get_params()
-        except: _params = {}
-    for _k, _v in _params.items():
-        if _k in _SKIP_PARAMS: continue
-        if isinstance(_v, float): _fmt = f"{_v:.6g}"
-        elif isinstance(_v, (tuple,list)): _fmt = str(_v)
-        else: _fmt = str(_v)
-        _typ = "int" if isinstance(_v,int) else ("float" if isinstance(_v,float) else "categorical")
-        _hpo_rows.append({"Learner":_nm,"Parameter":_k,"Type":_typ,"Optimal Value":_fmt})
-
-_hp_df = pd.DataFrame(_hpo_rows)
-
-# Search spaces — fixed values from the notebook
-_SEARCH_SPACES = {
-    ("XGBoost","n_estimators")       : "[300, 2000]",
-    ("XGBoost","learning_rate")      : "[0.005, 0.15] log",
-    ("XGBoost","max_depth")          : "[4, 10]",
-    ("XGBoost","subsample")          : "[0.6, 1.0]",
-    ("XGBoost","colsample_bytree")   : "[0.5, 1.0]",
-    ("XGBoost","min_child_weight")   : "[1, 20]",
-    ("XGBoost","gamma")              : "[0.0, 0.5]",
-    ("XGBoost","reg_lambda")         : "[0.01, 10.0] log",
-    ("XGBoost","reg_alpha")          : "[0.0, 2.0]",
-    ("LightGBM","n_estimators")      : "[300, 2000]",
-    ("LightGBM","learning_rate")     : "[0.005, 0.15] log",
-    ("LightGBM","num_leaves")        : "[31, 255]",
-    ("LightGBM","subsample")         : "[0.6, 1.0]",
-    ("LightGBM","colsample_bytree")  : "[0.5, 1.0]",
-    ("LightGBM","min_child_samples") : "[5, 100]",
-    ("LightGBM","reg_lambda")        : "[0.01, 10.0] log",
-    ("LightGBM","reg_alpha")         : "[0.0, 2.0]",
-    ("GBR","n_estimators")           : "[300, 1500]",
-    ("GBR","learning_rate")          : "[0.005, 0.1] log",
-    ("GBR","max_depth")              : "[3, 7]",
-    ("GBR","subsample")              : "[0.6, 1.0]",
-    ("GBR","min_samples_leaf")       : "[1, 10]",
-    ("GBR","max_features")           : "[0.4, 1.0]",
-    ("HistGBR","max_iter")           : "[300, 1500]",
-    ("HistGBR","learning_rate")      : "[0.005, 0.1] log",
-    ("HistGBR","max_depth")          : "[3, 10]",
-    ("HistGBR","l2_regularization")  : "[0.0, 1.0]",
-    ("HistGBR","min_samples_leaf")   : "[5, 50]",
-    ("HistGBR","max_leaf_nodes")     : "[20, 255]",
-    ("RF","n_estimators")            : "[200, 800]",
-    ("RF","min_samples_leaf")        : "[1, 10]",
-    ("RF","max_features")            : "[0.3, 0.9]",
-    ("RF","min_samples_split")       : "[2, 10]",
-    ("Extra Trees","n_estimators")   : "[200, 800]",
-    ("Extra Trees","min_samples_leaf"): "[1, 10]",
-    ("Extra Trees","max_features")   : "[0.3, 0.9]",
-    ("Extra Trees","min_samples_split"): "[2, 10]",
-    ("KNN","n_neighbors")            : "[2, 20]",
-    ("KNN","weights")                : "{uniform, distance}",
-    ("KNN","p")                      : "{1, 2}",
-    ("Ridge","alpha")                : "[0.001, 100.0] log",
+        oth = [k for k in _keys if k != f_]; sub = df_raw
+    diffs = [np.diff(g.sort_values(f_)["FOV"].values) for _, g in sub.groupby(oth)]
+    diffs = [d for d in diffs if len(d)]
+    allv = np.concatenate(diffs)
+    _mono_rows.append({"Factor": f_, "n_adjacent_steps": len(allv),
+                       "pct_steps_FOV_decreases": round(100 * np.mean(allv < 0), 2),
+                       "pct_cells_strictly_monotone": round(100 * np.mean([np.all(d < 0) for d in diffs]), 2),
+                       "median_step_kV": round(float(np.median(allv)), 3)})
+_mono_data = pd.DataFrame(_mono_rows); print(_mono_data.to_string(index=False))
+savetab(_mono_data, "R1-1_data_monotonicity.csv")
+
+_cells = ["Sample", "RH", "Aging", "J", "K"]
+_exp = (df_raw.groupby(_cells)
+        .apply(lambda g: pd.Series({"b_SDD": np.polyfit(np.log(g["SDD"]), np.log(g["FOV"]), 1)[0],
+                                    "r2_loglog": np.corrcoef(np.log(g["SDD"]), np.log(g["FOV"]))[0, 1] ** 2}))
+        .reset_index())
+savetab(_exp, "R1-1_SDD_exponent_per_condition.csv")
+_exp_sum = pd.concat([
+    _exp.groupby("Sample")["b_SDD"].describe()[["mean", "std", "min", "max"]].assign(by="Sample"),
+    _exp.groupby("RH")["b_SDD"].describe()[["mean", "std", "min", "max"]].assign(by="RH"),
+    _exp.groupby("Aging")["b_SDD"].describe()[["mean", "std", "min", "max"]].assign(by="Aging"),
+]).round(4)
+_exp_sum.loc["ALL"] = [_exp.b_SDD.mean(), _exp.b_SDD.std(), _exp.b_SDD.min(), _exp.b_SDD.max(), "all"]
+print(_exp_sum.to_string())
+savetab(_exp_sum, "R1-1_SDD_exponent_summary.csv", index=True)
+
+fig, axes = plt.subplots(1, 4, figsize=(18, 4.2))
+for ax, f_ in zip(axes, ["SDD", "RH", "Aging", "J"]):
+    sub = df_raw if f_ != "J" else df_raw[df_raw["K"] > 0]
+    m = sub.groupby(["Sample", f_])["FOV"].mean().unstack(0)
+    for i, c in enumerate(m.columns):
+        ax.plot(m.index, m[c], "o-", color=PALETTE[i], label=f"Smp_{c}")
+    if f_ == "SDD":
+        ax.set_xscale("log"); ax.set_yscale("log")
+    ax.set(xlabel=f_, ylabel="Mean measured FOV (kV)", title=f"Measured FOV vs {f_}")
+    ax.grid(alpha=0.3)
+axes[0].legend(fontsize=8)
+plt.suptitle("Measured flashover voltage: marginal means by insulator type (data only)", fontweight="bold")
+plt.tight_layout(); savefig("FigR1_data_response_by_type.png")
+
+# ════════════════════════════════════════════════════════════════════════
+# §4  EDA + VIF (unchanged analyses; regenerated for completeness)
+# ════════════════════════════════════════════════════════════════════════
+if RUN_EDA:
+    section("§4  EDA + VIF")
+    from statsmodels.stats.outliers_influence import variance_inflation_factor
+    from statsmodels.tools.tools import add_constant
+    _VIF_COLS = NUM_RAW + DERIVED
+    _Xv = add_constant(X_df[_VIF_COLS].astype(float))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        _vif = pd.DataFrame({"Feature": _VIF_COLS,
+                             "VIF": [variance_inflation_factor(_Xv.values, i + 1) for i in range(len(_VIF_COLS))]})
+    _vif = _vif.sort_values("VIF", ascending=False).reset_index(drop=True)
+    _vif["Severity"] = _vif["VIF"].apply(lambda v: "High (>10)" if v > 10 else ("Moderate (5-10)" if v > 5 else "Low (<5)"))
+    savetab(_vif, "TabS2_vif.csv")
+    fig, ax = plt.subplots(figsize=(10, 7))
+    _vc = np.minimum(_vif["VIF"].replace(np.inf, 1e7).values[::-1], 1e7)
+    ax.barh(range(len(_vc)), _vc, color=["#D7191C" if v > 10 else ("#F4A582" if v > 5 else "#2166AC") for v in _vc])
+    ax.set_xscale("log"); ax.axvline(5, color="orange", ls="--"); ax.axvline(10, color="red", ls="--")
+    ax.set_yticks(range(len(_vc))); ax.set_yticklabels(_vif["Feature"].values[::-1], fontsize=9)
+    ax.set_xlabel("VIF (log scale; infinite values drawn at 1e7)"); ax.set_title("Variance inflation factors")
+    plt.tight_layout(); savefig("FigS14_vif.png")
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    axes[0].hist(y_all, bins=55, color=PALETTE[0], alpha=0.82, edgecolor="white")
+    axes[0].axvline(y_all.mean(), color="crimson", ls="--", label=f"Mean={y_all.mean():.1f} kV")
+    axes[0].axvline(np.median(y_all), color="darkorange", ls=":", label=f"Median={np.median(y_all):.1f} kV")
+    axes[0].set(xlabel="FOV (kV)", ylabel="Frequency"); axes[0].legend()
+    probplot(y_all, plot=axes[1]); axes[1].set_title("Normal Q-Q plot")
+    _kx = np.linspace(y_all.min(), y_all.max(), 300); _kd = gaussian_kde(y_all)(_kx)
+    axes[2].plot(_kx, _kd, color=PALETTE[0]); axes[2].fill_between(_kx, _kd, alpha=0.2)
+    axes[2].set(xlabel="FOV (kV)", ylabel="Density")
+    plt.tight_layout(); savefig("FigS01_fov_distribution.png")
+
+    fig, axes = plt.subplots(2, 4, figsize=(20, 9))
+    for i, c in enumerate(["CD", "AD", "SDD", "RH", "Aging", "J", "K"]):
+        ax = axes[i // 4, i % 4]; ax.hist(df_raw[c], bins=45, color=PALETTE[i], alpha=0.82)
+        ax.set(xlabel=c, ylabel="Frequency")
+    axes[1, 3].set_visible(False); plt.tight_layout(); savefig("FigS02_input_histograms.png")
+
+    _cc = X_df[["CD", "AD", "SDD", "RH", "Aging", "J", "K", "log_SDD", "log_RH", "log_J", "log_CD"]].copy()
+    _cc["FOV"] = y_all; _cm = _cc.corr()
+    fig, ax = plt.subplots(figsize=(13, 10))
+    sns.heatmap(_cm, mask=np.triu(np.ones_like(_cm, dtype=bool)), annot=True, fmt=".2f",
+                cmap=sns.diverging_palette(220, 10, as_cmap=True), center=0, vmin=-1, vmax=1, ax=ax)
+    plt.tight_layout(); savefig("FigS03_correlation_heatmap.png")
+
+    fig, axes = plt.subplots(2, 3, figsize=(17, 11))
+    for ax, (c, lab) in zip(axes.flat, [("log_SDD", "ln(SDD)"), ("log_CD", "ln(CD)"), ("log_RH", "ln(RH)"),
+                                         ("Aging", "Aging"), ("log_J", "ln(J)"), ("K", "K")]):
+        v = X_df[c].values; ax.scatter(v, y_all, s=6, alpha=0.35, c=y_all, cmap="plasma")
+        ax.set(xlabel=lab, ylabel="FOV (kV)", title=f"FOV vs {lab} (r={np.corrcoef(v, y_all)[0, 1]:.3f})")
+    plt.tight_layout(); savefig("FigS04_fov_scatter_grid.png")
+
+    _pp = _cc[["log_SDD", "log_CD", "log_RH", "Aging", "FOV"]]
+    g = sns.pairplot(_pp.sample(min(2000, len(_pp)), random_state=1), plot_kws={"s": 5, "alpha": 0.3})
+    g.savefig(os.path.join(FIG_DIR, "FigS05_pairplot.png")); plt.close("all"); print("  [fig] FigS05_pairplot.png")
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    ax.boxplot([y_all[STRAT == s] for s in SMP_LEVELS], patch_artist=True)
+    ax.set_xticks(range(1, len(SMP_COLS) + 1)); ax.set_xticklabels(SMP_COLS); ax.set_ylabel("FOV (kV)"); plt.tight_layout(); savefig("FigS06_fov_by_type.png")
+
+    fig, axes = plt.subplots(2, 4, figsize=(20, 9))
+    for col, (c, lc) in enumerate([("SDD", "log_SDD"), ("RH", "log_RH"), ("CD", "log_CD"), ("J", "log_J")]):
+        for row, cc in enumerate([c, lc]):
+            v = X_df[cc].values; axes[row, col].scatter(v, y_all, s=5, alpha=0.3, color=PALETTE[col + 4 * row])
+            axes[row, col].set(xlabel=cc, ylabel="FOV (kV)", title=f"r={np.corrcoef(v, y_all)[0, 1]:.3f}")
+    plt.tight_layout(); savefig("FigS07_log_transform.png")
+    savetab(df_raw[NUM_RAW + ["FOV"]].describe().round(3), "Tab1_descriptive_stats.csv", index=True)
+
+# ════════════════════════════════════════════════════════════════════════
+# §5  METRICS / STATISTICS HELPERS
+# ════════════════════════════════════════════════════════════════════════
+def compute_metrics(yt, yp):
+    yt = np.asarray(yt); yp = np.asarray(yp)
+    return dict(R2=float(r2_score(yt, yp)),
+                RMSE=float(np.sqrt(mean_squared_error(yt, yp))),
+                MAE=float(mean_absolute_error(yt, yp)),
+                MAPE=float(np.mean(np.abs((yt - yp) / yt)) * 100),
+                NSE=float(1 - np.sum((yt - yp) ** 2) / np.sum((yt - yt.mean()) ** 2)))
+
+def boot_ci_observations(yt, yp, n_boot=None, seed=42):
+    """[R2-5] CI of the R² of ONE split: resample test observations."""
+    n_boot = n_boot or N_BOOT
+    rng = np.random.RandomState(seed); n = len(yt)
+    v = [r2_score(yt[i], yp[i]) for i in (rng.randint(0, n, n) for _ in range(n_boot))]
+    return float(np.percentile(v, 2.5)), float(np.percentile(v, 97.5))
+
+def boot_ci_seed_mean(vals, n_boot=None, seed=42):
+    """[R2-5] CI of the 10-seed MEAN: resample the seed-level values."""
+    n_boot = n_boot or N_BOOT
+    vals = np.asarray(vals); rng = np.random.RandomState(seed)
+    v = [vals[rng.randint(0, len(vals), len(vals))].mean() for _ in range(n_boot)]
+    return float(np.percentile(v, 2.5)), float(np.percentile(v, 97.5))
+
+def cliffs_delta(a, b):
+    stat, _ = mannwhitneyu(a, b, alternative="two-sided")
+    d = 2. * float(stat) / (len(a) * len(b)) - 1.
+    sz = "large" if abs(d) >= .474 else "medium" if abs(d) >= .33 else "small" if abs(d) >= .147 else "negligible"
+    return round(d, 4), sz
+
+# ════════════════════════════════════════════════════════════════════════
+# §6  MODEL ZOO: search spaces, builders, default settings  [R2-6]
+# ════════════════════════════════════════════════════════════════════════
+TUNABLE = ["XGBoost", "LightGBM", "GBR", "HistGBR", "RF", "Extra Trees",
+           "Ridge", "Decision Tree", "KNN", "SVR", "MLP"]
+SCALED = {"Ridge", "KNN", "SVR", "MLP"}               # RobustScaler inside a Pipeline
+MLP_ARCHS = [(64, 32), (128, 64), (128, 64, 32), (256, 128, 64), (256, 128, 64, 32), (128, 64, 32, 16)]
+
+SEARCH_SPACES = {   # human-readable, written to Table S8
+    "XGBoost": {"n_estimators": "int [300, 2000]", "learning_rate": "float [0.005, 0.15] log",
+                "max_depth": "int [4, 10]", "subsample": "float [0.6, 1.0]",
+                "colsample_bytree": "float [0.5, 1.0]", "min_child_weight": "int [1, 20]",
+                "gamma": "float [0, 0.5]", "reg_lambda": "float [0.01, 10] log", "reg_alpha": "float [0, 2]"},
+    "LightGBM": {"n_estimators": "int [300, 2000]", "learning_rate": "float [0.005, 0.15] log",
+                 "num_leaves": "int [31, 255]", "subsample": "float [0.6, 1.0]",
+                 "colsample_bytree": "float [0.5, 1.0]", "min_child_samples": "int [5, 100]",
+                 "reg_lambda": "float [0.01, 10] log", "reg_alpha": "float [0, 2]"},
+    "GBR": {"n_estimators": "int [300, 1500]", "learning_rate": "float [0.005, 0.1] log",
+            "max_depth": "int [3, 7]", "subsample": "float [0.6, 1.0]",
+            "min_samples_leaf": "int [1, 10]", "max_features": "float [0.4, 1.0]"},
+    "HistGBR": {"max_iter": "int [300, 1500]", "learning_rate": "float [0.005, 0.1] log",
+                "max_depth": "int [3, 10]", "l2_regularization": "float [0, 1]",
+                "min_samples_leaf": "int [5, 50]", "max_leaf_nodes": "int [20, 255]"},
+    "RF": {"n_estimators": "int [200, 800]", "min_samples_leaf": "int [1, 10]",
+           "max_features": "float [0.3, 0.9]", "min_samples_split": "int [2, 10]"},
+    "Extra Trees": {"n_estimators": "int [200, 800]", "min_samples_leaf": "int [1, 10]",
+                    "max_features": "float [0.3, 0.9]", "min_samples_split": "int [2, 10]"},
+    "Ridge": {"alpha": "float [0.001, 100] log"},
+    "Decision Tree": {"max_depth": "int [3, 20]", "min_samples_leaf": "int [1, 20]",
+                      "min_samples_split": "int [2, 20]",
+                      "max_features": "{sqrt, log2, None, 0.5, 0.7, 0.9}"},
+    "KNN": {"n_neighbors": "int [2, 20]", "weights": "{uniform, distance}", "p": "{1, 2}"},
+    "SVR": {"C": "float [0.1, 1000] log", "gamma": "{scale, auto}", "epsilon": "float [0.001, 1] log",
+            "kernel": "fixed: rbf"},
+    "MLP": {"hidden_layer_sizes": "{" + ", ".join(str(a) for a in MLP_ARCHS) + "}",
+            "alpha": "float [1e-5, 1e-2] log", "learning_rate_init": "float [1e-4, 1e-2] log",
+            "batch_size": "{32, 64, 128, auto}",
+            "fixed": "max_iter=500, early_stopping=True"},
 }
 
-_hp_df["Search Space"] = _hp_df.apply(
-    lambda r: _SEARCH_SPACES.get((r["Learner"], r["Parameter"]), "—"), axis=1)
-_hp_df = _hp_df[["Learner","Parameter","Type","Search Space","Optimal Value"]]
+def suggest(name, t):
+    if name == "XGBoost":
+        return dict(n_estimators=t.suggest_int("n_estimators", 300, 2000),
+                    learning_rate=t.suggest_float("learning_rate", 0.005, 0.15, log=True),
+                    max_depth=t.suggest_int("max_depth", 4, 10),
+                    subsample=t.suggest_float("subsample", 0.6, 1.0),
+                    colsample_bytree=t.suggest_float("colsample_bytree", 0.5, 1.0),
+                    min_child_weight=t.suggest_int("min_child_weight", 1, 20),
+                    gamma=t.suggest_float("gamma", 0., 0.5),
+                    reg_lambda=t.suggest_float("reg_lambda", 0.01, 10., log=True),
+                    reg_alpha=t.suggest_float("reg_alpha", 0., 2.))
+    if name == "LightGBM":
+        return dict(n_estimators=t.suggest_int("n_estimators", 300, 2000),
+                    learning_rate=t.suggest_float("learning_rate", 0.005, 0.15, log=True),
+                    num_leaves=t.suggest_int("num_leaves", 31, 255),
+                    subsample=t.suggest_float("subsample", 0.6, 1.0),
+                    colsample_bytree=t.suggest_float("colsample_bytree", 0.5, 1.0),
+                    min_child_samples=t.suggest_int("min_child_samples", 5, 100),
+                    reg_lambda=t.suggest_float("reg_lambda", 0.01, 10., log=True),
+                    reg_alpha=t.suggest_float("reg_alpha", 0., 2.))
+    if name == "GBR":
+        return dict(n_estimators=t.suggest_int("n_estimators", 300, 1500),
+                    learning_rate=t.suggest_float("learning_rate", 0.005, 0.1, log=True),
+                    max_depth=t.suggest_int("max_depth", 3, 7),
+                    subsample=t.suggest_float("subsample", 0.6, 1.0),
+                    min_samples_leaf=t.suggest_int("min_samples_leaf", 1, 10),
+                    max_features=t.suggest_float("max_features", 0.4, 1.0))
+    if name == "HistGBR":
+        return dict(max_iter=t.suggest_int("max_iter", 300, 1500),
+                    learning_rate=t.suggest_float("learning_rate", 0.005, 0.1, log=True),
+                    max_depth=t.suggest_int("max_depth", 3, 10),
+                    l2_regularization=t.suggest_float("l2_regularization", 0., 1.),
+                    min_samples_leaf=t.suggest_int("min_samples_leaf", 5, 50),
+                    max_leaf_nodes=t.suggest_int("max_leaf_nodes", 20, 255))
+    if name in ("RF", "Extra Trees"):
+        return dict(n_estimators=t.suggest_int("n_estimators", 200, 800),
+                    min_samples_leaf=t.suggest_int("min_samples_leaf", 1, 10),
+                    max_features=t.suggest_float("max_features", 0.3, 0.9),
+                    min_samples_split=t.suggest_int("min_samples_split", 2, 10))
+    if name == "Ridge":
+        return dict(alpha=t.suggest_float("alpha", 1e-3, 100., log=True))
+    if name == "Decision Tree":
+        return dict(max_depth=t.suggest_int("max_depth", 3, 20),
+                    min_samples_leaf=t.suggest_int("min_samples_leaf", 1, 20),
+                    min_samples_split=t.suggest_int("min_samples_split", 2, 20),
+                    max_features=t.suggest_categorical("max_features", ["sqrt", "log2", None, 0.5, 0.7, 0.9]))
+    if name == "KNN":
+        return dict(n_neighbors=t.suggest_int("n_neighbors", 2, 20),
+                    weights=t.suggest_categorical("weights", ["uniform", "distance"]),
+                    p=t.suggest_int("p", 1, 2))
+    if name == "SVR":
+        return dict(C=t.suggest_float("C", 0.1, 1000., log=True),
+                    gamma=t.suggest_categorical("gamma", ["scale", "auto"]),
+                    epsilon=t.suggest_float("epsilon", 0.001, 1., log=True))
+    if name == "MLP":
+        a = t.suggest_categorical("arch", list(range(len(MLP_ARCHS))))
+        return dict(hidden_layer_sizes=list(MLP_ARCHS[a]),
+                    alpha=t.suggest_float("alpha", 1e-5, 1e-2, log=True),
+                    learning_rate_init=t.suggest_float("learning_rate_init", 1e-4, 1e-2, log=True),
+                    batch_size=t.suggest_categorical("batch_size", [32, 64, 128, "auto"]))
+    raise KeyError(name)
 
-# Save to Excel
-_abl_path2 = os.path.join(OUT_DIR, "Table_HyperParams.xlsx")
-with pd.ExcelWriter(_abl_path2, engine="openpyxl") as _wr2:
-    _hp_df.to_excel(_wr2, sheet_name="Table7_HyperParams", index=False)
-print(f"  ✔ Table_HyperParams.xlsx — {len(_hp_df)} rows, {_hp_df['Learner'].nunique()} models")
+# Fixed settings used when SKIP_HPO=True and for the extrapolation study
+DEFAULT_PARAMS = {
+    "XGBoost": dict(n_estimators=1000, learning_rate=0.02, max_depth=6, subsample=0.8,
+                    colsample_bytree=0.7, min_child_weight=3, gamma=0., reg_lambda=1.),
+    "LightGBM": dict(n_estimators=1000, learning_rate=0.02, num_leaves=127, subsample=0.8,
+                     colsample_bytree=0.7, min_child_samples=10, reg_lambda=1.),
+    "GBR": dict(n_estimators=800, learning_rate=0.03, max_depth=4, subsample=0.8, min_samples_leaf=2),
+    "HistGBR": dict(max_iter=500, learning_rate=0.03, max_depth=6, l2_regularization=0., min_samples_leaf=5),
+    "RF": dict(n_estimators=400, min_samples_leaf=1, max_features=0.6),
+    "Extra Trees": dict(n_estimators=400, min_samples_leaf=1, max_features=0.5),
+    "Ridge": dict(alpha=1.),
+    "Decision Tree": dict(max_depth=12, min_samples_leaf=5),
+    "KNN": dict(n_neighbors=5, weights="distance"),
+    "SVR": dict(C=100., gamma="scale", epsilon=0.05),
+    "MLP": dict(hidden_layer_sizes=[128, 64, 32], alpha=1e-4, learning_rate_init=0.001, batch_size="auto"),
+}
+# Library defaults: the "without HPO" ablation variant
+LIBDEFAULT_PARAMS = {
+    "XGBoost": dict(n_estimators=100, max_depth=6, learning_rate=0.3, subsample=1.0, colsample_bytree=1.0),
+    "LightGBM": dict(n_estimators=100, num_leaves=31, learning_rate=0.1),
+    "GBR": dict(n_estimators=100, max_depth=3, learning_rate=0.1),
+    "HistGBR": dict(max_iter=100),
+    "RF": dict(n_estimators=100), "Extra Trees": dict(n_estimators=100),
+    "KNN": dict(n_neighbors=5, weights="distance"),
+}
 
-# Console output
-print("\n=== TABLE 7 — OPTIMAL HYPERPARAMETERS ===")
-for _nm in _HYPHY_LEARNERS:
-    sub = _hp_df[_hp_df["Learner"]==_nm]
-    if len(sub)==0: continue
-    print(f"\n  [{_nm}]")
-    for _, row in sub.iterrows():
-        print(f"    {row['Parameter']:<25} = {row['Optimal Value']:<18}  (search: {row['Search Space']})")
+def build(name, p, seed, n_jobs=-1):
+    p = dict(p)
+    if name == "XGBoost":
+        gpu = {"device": "cuda"} if USE_GPU else {}
+        m = xgb.XGBRegressor(**p, **gpu, random_state=seed, verbosity=0, n_jobs=n_jobs, tree_method="hist")
+    elif name == "LightGBM":
+        m = lgb.LGBMRegressor(**p, random_state=seed, n_jobs=n_jobs, verbose=-1)
+    elif name == "GBR":
+        m = GradientBoostingRegressor(**p, random_state=seed)
+    elif name == "HistGBR":
+        m = HistGradientBoostingRegressor(**p, random_state=seed)
+    elif name == "RF":
+        m = RandomForestRegressor(**p, n_jobs=n_jobs, random_state=seed)
+    elif name == "Extra Trees":
+        m = ExtraTreesRegressor(**p, n_jobs=n_jobs, random_state=seed)
+    elif name == "Ridge":
+        m = Ridge(**p)
+    elif name == "Decision Tree":
+        m = DecisionTreeRegressor(**p, random_state=seed)
+    elif name == "KNN":
+        m = KNeighborsRegressor(**p)
+    elif name == "SVR":
+        m = SVR(kernel="rbf", **p)
+    elif name == "MLP":
+        p["hidden_layer_sizes"] = tuple(p["hidden_layer_sizes"])
+        m = MLPRegressor(**p, max_iter=500, early_stopping=True, random_state=seed)
+    else:
+        raise KeyError(name)
+    return Pipeline([("sc", RobustScaler()), ("m", m)]) if name in SCALED else m
 
+# ── Physics-based empirical baselines (unchanged) ───────────────────────
+_ix = {c: FN.index(c) for c in FN}
+_SMP_IX = [_ix[c] for c in SMP_COLS]
+PHY_NAMES = ["log_CD", "log_AD", "log_SDD", "log_RH", "Aging", "log_J", "K"]
 
-# ════ §16 SUMMARY ═════════════════════════════════════════════════
-section("§16  Summary")
-figs_n=len([f for f in os.listdir(OUT_DIR) if f.endswith(".png")])
-best_r=agg.iloc[0]; ci_b=ci_res.get(BEST,{})
-print(f"\n  ★ {BEST}: R²={best_r.R2_mean:.4f}±{best_r.R2_std:.4f}")
-print(f"     RMSE={best_r.RMSE_mean:.4f} kV  MAPE={best_r.MAPE_mean:.3f}%  NSE={best_r.NSE_mean:.4f}")
-print(f"     95% CI: [{ci_b.get('R2_lo',0):.4f}, {ci_b.get('R2_hi',0):.4f}]")
-print(f"\n  HyPhysML: R²={m_hyp42['R2']:.4f}  RMSE={m_hyp42['RMSE']:.4f} kV")
-print(f"\n  XGBoost: {'✅' if HAS_XGB else '❌ missing — pip install xgboost'}")
-print(f"  LightGBM:{'✅' if HAS_LGB else '❌ missing — pip install lightgbm'}")
-print(f"  Optuna:  {'✅' if HAS_OPTUNA else '❌ missing — pip install optuna'}")
-print(f"\n  {figs_n} figures  |  results_Q1_ULTIMATE.xlsx  |  {OUT_DIR}/")
-print(f"  {'='*55}\n  COMPLETED\n  {'='*55}")
+def physics_design(X, with_type=True):
+    cols = [np.log(X[:, _ix["CD"]]), np.log(X[:, _ix["AD"]]), np.log(X[:, _ix["SDD"]]),
+            np.log(X[:, _ix["RH"]]), X[:, _ix["Aging"]], np.log(np.clip(X[:, _ix["J"]], 0.5, None)),
+            X[:, _ix["K"]]]
+    if with_type:
+        cols += [X[:, i] for i in _SMP_IX]
+    return np.column_stack(cols)
 
-
-# ========================================================================
-# [CODE CELL 5]
-# ========================================================================
-# ════════════════════════════════════════════════════════════════
-# §17  ABLATION STUDY — HyPhysML Component Contribution Analysis
-#
-#  Each component removed one at a time to measure its effect (10 seeds x 4 variants):
-#  Variant                        | HPO | OOF+Ridge | 7 Base Learners
-#  ------------------------------|-----|-----------|----------------
-#  HyPhysML (Full)               |  V  |     V     |       V
-#  HyPhysML-noHPO                |  X  |     V     |       V   <- Optuna removed
-#  HyPhysML-MeanStack            |  V  |  Mean     |       V   <- Ridge -> simple average
-#  XGBoost (Single Model, HPO)   |  V  |     X     |       X   <- Stacking removed
-# ════════════════════════════════════════════════════════════════
-
-section("§17  Ablation Study — Component Contribution Analysis")
-
-# ── Variant A: HyPhysML-noHPO ────────────────────────────────────
-# All base learners with sklearn/library default parameters (no HPO)
-class HyPhysML_NoHPO(HyPhysML):
-    """HyPhysML — without Bayesian HPO (all base learners use default parameters)"""
-    def _make_base(self, seed):
-        bls = {}
-        if HAS_XGB:
-            bls["XGBoost"] = xgb.XGBRegressor(
-                n_estimators=100, max_depth=6, learning_rate=0.3,
-                subsample=1.0, colsample_bytree=1.0,
-                random_state=seed, verbosity=0, n_jobs=-1, tree_method="hist"
-            )
-        if HAS_LGB:
-            bls["LightGBM"] = lgb.LGBMRegressor(
-                n_estimators=100, num_leaves=31, learning_rate=0.1,
-                random_state=seed, n_jobs=-1, verbose=-1
-            )
-        bls["GBR"]     = GradientBoostingRegressor(
-            n_estimators=100, max_depth=3, learning_rate=0.1, random_state=seed)
-        bls["HistGBR"] = HistGradientBoostingRegressor(
-            max_iter=100, random_state=seed)
-        bls["RF"]      = RandomForestRegressor(
-            n_estimators=100, n_jobs=-1, random_state=seed)
-        bls["ET"]      = ExtraTreesRegressor(
-            n_estimators=100, n_jobs=-1, random_state=seed)
-        bls["KNN"]     = Pipeline([
-            ("sc", RobustScaler()),
-            ("m",  KNeighborsRegressor(n_neighbors=5, weights="distance"))
-        ])
-        return bls
-
-# ── Variant B: HyPhysML-MeanStack ────────────────────────────────
-# Simple equal-weight averaging instead of Ridge meta-learner
-class HyPhysML_MeanStack(HyPhysML):
-    """HyPhysML — simple equal-weight average instead of Ridge meta-learner"""
+class ObenausModel(BaseEstimator, RegressorMixin):
+    """Log-linearised Obenaus model (Eq. 6). Used (i) as an empirical baseline and
+    (ii) as the AUXILIARY physics regression whose coefficient signs are checked.
+    It is fitted separately and does NOT constrain HyPhysML."""
+    def __init__(self, alpha=0.01, with_type=True):
+        self.alpha = alpha; self.with_type = with_type
     def fit(self, X, y):
-        rs  = self.random_state
-        bls = self._make_base(rs)
-        nb  = len(bls)
-        self.bl_fit_       = {nm_: clone(bl_).fit(X, y) for nm_, bl_ in bls.items()}
-        self.meta_         = None
-        self.meta_weights_ = np.ones(nb) / nb
-        self.meta_names_   = list(bls.keys())
-        self.pm_           = ObenausModel(alpha=0.01).fit(X, y)
-        self.physics_coef_ = self.pm_.coef_dict_
-        self.n_sdd_        = self.pm_.n_sdd_
+        self.ridge_ = Ridge(alpha=self.alpha).fit(physics_design(X, self.with_type), np.log(y))
+        names = PHY_NAMES + (SMP_COLS if self.with_type else [])
+        self.coef_dict_ = dict(zip(names, self.ridge_.coef_))
+        self.intercept_ = float(self.ridge_.intercept_)
+        return self
+    def predict(self, X):
+        return np.exp(self.ridge_.predict(physics_design(X, self.with_type)))
+
+SIGN_CHECKS = {"log_SDD": -1, "log_RH": -1, "log_CD": +1, "log_AD": +1, "Aging": -1, "log_J": -1}
+
+class RizkModel(BaseEstimator, RegressorMixin):
+    def __init__(self, alpha=0.01):
+        self.alpha = alpha
+    def _Xr(self, X):
+        return np.column_stack([np.log(X[:, _ix["CD"]]), np.log(X[:, _ix["SDD"]]),
+                                np.log(X[:, _ix["RH"]]), X[:, _ix["Aging"]]] + [X[:, i] for i in _SMP_IX])
+    def fit(self, X, y):
+        self.ridge_ = Ridge(alpha=self.alpha).fit(self._Xr(X), np.log(y)); return self
+    def predict(self, X):
+        return np.exp(self.ridge_.predict(self._Xr(X)))
+
+# ── HyPhysML stacking ensemble ──────────────────────────────────────────
+BASE_LEARNERS = ["XGBoost", "LightGBM", "GBR", "HistGBR", "RF", "Extra Trees", "KNN"]
+
+class HyPhysML(BaseEstimator, RegressorMixin):
+    """Seven base learners -> ridge meta-learner on out-of-fold predictions.
+    meta="ridge": y_hat = w0 + sum_b w_b f_b(x)  (w0 = ridge intercept)
+    meta="mean" : y_hat = mean_b f_b(x)          (ablation)"""
+    def __init__(self, params=None, n_folds=5, random_state=42, meta_alpha=0.1, meta="ridge"):
+        self.params = params; self.n_folds = n_folds; self.random_state = random_state
+        self.meta_alpha = meta_alpha; self.meta = meta
+
+    def _make_base(self):
+        P = self.params or DEFAULT_PARAMS
+        return {nm: build(nm, P[nm], self.random_state) for nm in BASE_LEARNERS}
+
+    def fit(self, X, y):
+        bls = self._make_base(); self.base_names_ = list(bls)
+        if self.meta == "ridge":
+            kf = KFold(n_splits=self.n_folds, shuffle=True, random_state=self.random_state)
+            oof = np.zeros((len(y), len(bls)))
+            for b, (nm, est) in enumerate(bls.items()):
+                for ti, vi in kf.split(X):
+                    oof[vi, b] = clone(est).fit(X[ti], y[ti]).predict(X[vi])
+            self.oof_ = oof
+            self.oof_r2_ = {nm: float(r2_score(y, oof[:, b])) for b, nm in enumerate(bls)}
+            self.oof_resid_corr_ = np.corrcoef((y[:, None] - oof).T)
+            m = Ridge(alpha=self.meta_alpha, fit_intercept=True).fit(oof, y)
+            self.meta_coef_ = m.coef_.copy(); self.meta_intercept_ = float(m.intercept_)
+        else:
+            self.meta_coef_ = np.ones(len(bls)) / len(bls); self.meta_intercept_ = 0.
+        self.bl_fit_ = {nm: clone(est).fit(X, y) for nm, est in bls.items()}
+        return self
+
+    def base_predictions(self, X):
+        return np.column_stack([est.predict(X) for est in self.bl_fit_.values()])
+
+    def predict(self, X):
+        return self.base_predictions(X) @ self.meta_coef_ + self.meta_intercept_
+
+# ── HyPhysML-MC: monotone-constrained variant  [R1-2] [R2-2] ────────────
+MC_INPUTS = NUM_RAW + SMP_COLS            # raw inputs only: derived features would make
+MC_SIGNS = {"SDD": -1, "RH": -1, "Aging": -1, "J": -1}   # feature-level constraints inconsistent
+MC_LEARNERS = ["XGBoost", "LightGBM", "HistGBR"]           # learners that support monotone constraints
+
+class HyPhysMLMC(BaseEstimator, RegressorMixin):
+    """Physics-constrained stacking: XGBoost, LightGBM and HistGBR trained on the
+    raw inputs with monotone constraints (FOV non-increasing in SDD, RH, aging and
+    J), combined by a ridge meta-learner restricted to non-negative weights.
+    A non-negative combination of non-increasing functions is non-increasing, so
+    every prediction satisfies the constraints by construction."""
+    def __init__(self, params=None, n_folds=5, random_state=42, meta_alpha=0.1):
+        self.params = params; self.n_folds = n_folds; self.random_state = random_state
+        self.meta_alpha = meta_alpha
+
+    def _cols(self):
+        return [_ix[c] for c in MC_INPUTS]
+
+    def _make_base(self):
+        P = self.params or DEFAULT_PARAMS; s = self.random_state
+        cst = [MC_SIGNS.get(c, 0) for c in MC_INPUTS]
+        return {
+            "XGBoost": xgb.XGBRegressor(**P["XGBoost"], monotone_constraints="(" + ",".join(map(str, cst)) + ")",
+                                        **({"device": "cuda"} if USE_GPU else {}),
+                                        random_state=s, verbosity=0, n_jobs=-1, tree_method="hist"),
+            "LightGBM": lgb.LGBMRegressor(**P["LightGBM"], monotone_constraints=cst,
+                                          random_state=s, n_jobs=-1, verbose=-1),
+            "HistGBR": HistGradientBoostingRegressor(**P["HistGBR"], monotonic_cst=cst, random_state=s),
+        }
+
+    def fit(self, X, y):
+        Xr = X[:, self._cols()]; bls = self._make_base(); self.base_names_ = list(bls)
+        kf = KFold(n_splits=self.n_folds, shuffle=True, random_state=self.random_state)
+        oof = np.zeros((len(y), len(bls)))
+        for b, est in enumerate(bls.values()):
+            for ti, vi in kf.split(Xr):
+                oof[vi, b] = clone(est).fit(Xr[ti], y[ti]).predict(Xr[vi])
+        m = Ridge(alpha=self.meta_alpha, positive=True).fit(oof, y)
+        self.meta_coef_ = m.coef_.copy(); self.meta_intercept_ = float(m.intercept_)
+        self.bl_fit_ = {nm: clone(est).fit(Xr, y) for nm, est in bls.items()}
         return self
 
     def predict(self, X):
-        preds = np.zeros((len(X), len(self.bl_fit_)))
-        for bi, (_, bl_) in enumerate(self.bl_fit_.items()):
-            try:    preds[:, bi] = bl_.predict(X)
-            except: preds[:, bi] = 0.
-        return np.mean(preds, axis=1)
+        Xr = X[:, self._cols()]
+        return np.column_stack([e.predict(Xr) for e in self.bl_fit_.values()]) @ self.meta_coef_ + self.meta_intercept_
 
-# ── Ablation loop ────────────────────────────────────────────────
-_abl_variants = {
-    "HyPhysML-noHPO"    : lambda s: HyPhysML_NoHPO(random_state=s),
-    "HyPhysML-MeanStack": lambda s: HyPhysML_MeanStack(random_state=s),
-}
+MODEL_NAMES = ["Obenaus", "Rizk", "Ridge", "Decision Tree", "KNN", "Extra Trees", "GBR",
+               "HistGBR", "RF", "SVR", "MLP", "HyPhysML", "XGBoost", "LightGBM"]
+EXTRA_VARIANTS = ["HyPhysML-MC", "HyPhysML-noHPO", "HyPhysML-MeanStack"]
 
-_abl_extra = []
-print(f"  {len(_abl_variants)} new variants x {len(SEEDS)} seeds — HyPhysML (Full) and XGBoost taken from existing results")
-for si, seed in enumerate(SEEDS):
-    print(f"  Seed {seed:>5} ({si+1}/{len(SEEDS)}) ->", end=" ")
-    idx_tr, idx_te = train_test_split(
-        idx_all, test_size=TEST_SIZE, random_state=seed,
-        stratify=df["Sample"].values
-    )
-    Xtr, Xte = X_all[idx_tr], X_all[idx_te]
-    ytr, yte  = y_all[idx_tr], y_all[idx_te]
-    for vname, model_fn in _abl_variants.items():
-        m_obj = model_fn(seed)
-        t0    = time.time()
+def get_model(name, P, seed):
+    if name == "Obenaus": return ObenausModel()
+    if name == "Rizk": return RizkModel()
+    if name == "HyPhysML": return HyPhysML(params=P, random_state=seed)
+    if name == "HyPhysML-MC": return HyPhysMLMC(params=P, random_state=seed)
+    if name == "HyPhysML-noHPO": return HyPhysML(params=LIBDEFAULT_PARAMS, random_state=seed)
+    if name == "HyPhysML-MeanStack": return HyPhysML(params=P, random_state=seed, meta="mean")
+    return build(name, P[name], seed)
+
+# ════════════════════════════════════════════════════════════════════════
+# §7  NESTED HPO (per seed, training data only)  [R2-1]
+# ════════════════════════════════════════════════════════════════════════
+def run_hpo(Xtr, ytr, seed):
+    ck = os.path.join(CK_DIR, f"hpo_seed{seed}.json")
+    store = json.load(open(ck)) if os.path.isfile(ck) else {}
+    if store.get("_n_trials") not in (None, N_OPTUNA):
+        print(f"    [HPO] checkpoint has {store.get('_n_trials')} trials, N_OPTUNA={N_OPTUNA} -> re-tuning")
+        store = {}
+    store["_n_trials"] = N_OPTUNA
+    cv = KFold(n_splits=N_FOLDS, shuffle=True, random_state=seed)
+    for name in TUNABLE:
+        if name in store:
+            continue
+        t0 = time.time()
+        def objective(trial, name=name):
+            p = suggest(name, trial)
+            try:
+                return cross_val_score(build(name, p, seed, n_jobs=1), Xtr, ytr, cv=cv,
+                                       scoring="r2", n_jobs=HPO_CV_JOBS).mean()
+            except Exception:
+                return -1e9
+        study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=seed))
+        study.optimize(objective, n_trials=N_OPTUNA, n_jobs=1)
+        best = suggest(name, optuna.trial.FixedTrial(study.best_params))
+        store[name] = {"params": best, "cv_r2": float(study.best_value),
+                       "minutes": round((time.time() - t0) / 60, 2)}
+        json.dump(store, open(ck, "w"), indent=1)
+        print(f"    [HPO seed {seed}] {name:<14} CV R²={study.best_value:.4f}  ({store[name]['minutes']} min)", flush=True)
+    return {k: v["params"] for k, v in store.items() if not k.startswith("_")}, store
+
+# ════════════════════════════════════════════════════════════════════════
+# §8  PROBES: monotonicity audit, response curves, noise, permutation
+# ════════════════════════════════════════════════════════════════════════
+AUDIT_LEVELS = {"SDD": sorted(df_raw["SDD"].unique()), "RH": sorted(df_raw["RH"].unique()),
+                "Aging": sorted(df_raw["Aging"].unique()),
+                "J": sorted(df_raw.loc[df_raw["K"] > 0, "J"].unique())}
+
+def response_matrix(model, raw_te, var, levels):
+    """Set `var` to each level for every test row, rebuild all features, predict.
+    Returns an (n_rows x n_levels) matrix."""
+    out = []
+    for L in levels:
+        r = raw_te.copy(); r[var] = L
+        out.append(model.predict(build_features(r).values))
+    return np.column_stack(out)
+
+def monotonicity_audit(model, raw_te, ice_n=0, seed=0):
+    res, curves, ice = {}, {}, {}
+    for var, levels in AUDIT_LEVELS.items():
+        rt = raw_te[raw_te["K"] > 0] if var == "J" else raw_te
+        P = response_matrix(model, rt, var, levels)
+        d = np.diff(P, axis=1)           # expected <= 0 (FOV falls as var rises)
+        res[var] = {"n_points": len(rt), "n_steps": int(d.size),
+                    "pct_steps_increasing": 100 * float(np.mean(d > 0)),
+                    "pct_steps_increasing_gt_0.1kV": 100 * float(np.mean(d > 0.1)),
+                    "pct_points_any_violation": 100 * float(np.mean((d > 0).any(axis=1))),
+                    "max_increase_kV": float(d.max())}
+        curves[var] = P.mean(axis=0)
+        if ice_n:
+            sel = np.random.RandomState(seed).choice(len(P), min(ice_n, len(P)), replace=False)
+            ice[var] = P[sel]
+    return res, curves, ice
+
+def noise_eval(model, raw_te, yte, std_ref, seed):
+    """[R2-3] Returns rows for the raw-propagated test and the single-column test."""
+    rows = []
+    X0 = build_features(raw_te).values
+    r2_0 = r2_score(yte, model.predict(X0))
+    for var in NOISE_FEATS:
+        for nl in NOISE_LEVELS:
+            for rep in range(N_NOISE_REP):
+                rng = np.random.RandomState(seed * 1000 + NOISE_FEATS.index(var) * 100 + int(nl * 100) + rep * 7)
+                eps = rng.normal(0., nl * std_ref[var], len(raw_te))
+                # (a) raw input perturbed, all derived features rebuilt, then clipped
+                r = raw_te.copy(); v = r[var].values.astype(float) + eps
+                lo, hi = CLIP_RULES[var]
+                clipped = np.zeros(len(v), bool)
+                if lo is not None: clipped |= v < lo; v = np.maximum(v, lo)
+                if hi is not None: clipped |= v > hi; v = np.minimum(v, hi)
+                r[var] = v
+                yp = model.predict(build_features(r).values)
+                rows.append({"mode": "raw_propagated", "Feature": var, "Noise_pct": int(nl * 100), "rep": rep,
+                             "R2": r2_score(yte, yp), "RMSE": float(np.sqrt(mean_squared_error(yte, yp))),
+                             "dR2": r2_score(yte, yp) - r2_0, "pct_clipped": 100 * clipped.mean()})
+                # (b) single engineered column perturbed (old protocol, for comparison)
+                Xs = X0.copy(); Xs[:, _ix[var]] += eps
+                yp = model.predict(Xs)
+                rows.append({"mode": "single_column", "Feature": var, "Noise_pct": int(nl * 100), "rep": rep,
+                             "R2": r2_score(yte, yp), "RMSE": float(np.sqrt(mean_squared_error(yte, yp))),
+                             "dR2": r2_score(yte, yp) - r2_0, "pct_clipped": 0.})
+    return rows, r2_0
+
+RAW_GROUPS = {"SDD": ["SDD"], "RH": ["RH"], "Aging": ["Aging"], "J": ["J"], "K": ["K"],
+              "Insulator type (geometry)": ["Sample", "CD", "AD", "CF"]}
+
+def grouped_raw_permutation(model, raw_te, yte, n_rep, seed):
+    base = r2_score(yte, model.predict(build_features(raw_te).values)); rows = []
+    for g, cols in RAW_GROUPS.items():
+        drops = []
+        for rep in range(n_rep):
+            perm = np.random.RandomState(seed + rep).permutation(len(raw_te))
+            r = raw_te.copy()
+            r[cols] = raw_te[cols].values[perm]
+            drops.append(base - r2_score(yte, model.predict(build_features(r).values)))
+        rows.append({"Group": g, "mean_R2_drop": float(np.mean(drops)), "sd": float(np.std(drops))})
+    return pd.DataFrame(rows).sort_values("mean_R2_drop", ascending=False)
+
+def stack_shap(hyp, X_bg, X_ex):
+    """Exact SHAP of the linear stack from per-learner interventional SHAP values:
+    phi_stack = sum_b w_b * phi_b (Shapley values are linear in the model)."""
+    phi = np.zeros(X_ex.shape); base = hyp.meta_intercept_; method = {}
+    for w, (nm, est) in zip(hyp.meta_coef_, hyp.bl_fit_.items()):
         try:
-            m_obj.fit(Xtr, ytr)
-            yp = m_obj.predict(Xte)
-            m  = compute_metrics(yte, yp)
-            m.update({"Variant": vname, "Seed": seed,
-                      "Time_s": round(time.time() - t0, 3)})
-            _abl_extra.append(m)
-            short = vname.replace("HyPhysML-","")[:8]
-            print(f"[{short} R2={m['R2']:.4f}]", end=" ")
-        except Exception as e:
-            print(f"[{vname} ERROR: {e}]", end=" ")
-    print()
+            if nm == "KNN":
+                raise TypeError
+            e = shap.TreeExplainer(est, data=X_bg, feature_perturbation="interventional")
+            pb = np.asarray(e.shap_values(X_ex, check_additivity=False)); eb = float(np.ravel(e.expected_value)[0])
+            method[nm] = "TreeExplainer"
+        except Exception:
+            e = shap.KernelExplainer(est.predict, X_bg)
+            pb = np.asarray(e.shap_values(X_ex, nsamples=N_KERNEL, silent=True)); eb = float(e.expected_value)
+            method[nm] = "KernelExplainer"
+        phi += w * pb; base += w * eb
+    add_err = float(np.max(np.abs(base + phi.sum(1) - hyp.predict(X_ex))))
+    return phi, base, method, add_err
 
-_abl_extra_df = pd.DataFrame(_abl_extra)
+# ════════════════════════════════════════════════════════════════════════
+# §9  PER-SEED RUN (checkpointed)
+# ════════════════════════════════════════════════════════════════════════
+def run_seed(seed):
+    ck = os.path.join(CK_DIR, f"seed{seed}.pkl")
+    if os.path.isfile(ck):
+        print(f"  seed {seed}: checkpoint found, skipping"); return
+    T0 = time.time()
+    tr, te = split(seed)
+    Xtr, Xte, ytr, yte = X_all[tr], X_all[te], y_all[tr], y_all[te]
+    raw_tr = df_raw.iloc[tr].reset_index(drop=True); raw_te = df_raw.iloc[te].reset_index(drop=True)
+    R = {"seed": seed, "idx_tr": tr, "idx_te": te, "n_test": len(te)}
 
-# Full HyPhysML + XGBoost pulled from existing res_df
-_abl_main = res_df[res_df["Model"].isin(["HyPhysML","XGBoost"])].copy()
-_abl_main["Variant"] = _abl_main["Model"].map({
-    "HyPhysML" : "HyPhysML (Full)",
-    "XGBoost"  : "XGBoost (Single Model, HPO)"
-})
-_cols = ["Variant","Seed","R2","RMSE","MAE","MAPE","NSE","Time_s"]
-_abl_main = _abl_main[[c for c in _cols if c in _abl_main.columns]]
+    section(f"Seed {seed}: nested HPO on {len(tr)} training records (test set untouched)")
+    if SKIP_HPO:
+        P, hpo_store = dict(DEFAULT_PARAMS), {}
+    else:
+        P, hpo_store = run_hpo(Xtr, ytr, seed)
+    R["params"] = P; R["hpo"] = hpo_store
 
-_abl_full = pd.concat([_abl_main, _abl_extra_df[[c for c in _cols if c in _abl_extra_df.columns]]], ignore_index=True)
+    section(f"Seed {seed}: fitting {len(MODEL_NAMES) + len(EXTRA_VARIANTS)} models")
+    metrics, preds, fitted = [], {}, {}
+    for name in MODEL_NAMES + EXTRA_VARIANTS:
+        m = get_model(name, P, seed); t0 = time.time()
+        m.fit(Xtr, ytr); t_fit = time.time() - t0
+        t1 = time.time(); yp = m.predict(Xte); t_pred = time.time() - t1
+        ytp = m.predict(Xtr)
+        row = compute_metrics(yte, yp)
+        row.update({"Model": name, "Seed": seed, "Time_fit_s": round(t_fit, 3),
+                    "Time_predict_ms_per_sample": round(1000 * t_pred / len(te), 4),
+                    "R2_train": float(r2_score(ytr, ytp))})
+        metrics.append(row); preds[name] = yp
+        if name in ("HyPhysML", "HyPhysML-MC", "XGBoost", "HyPhysML-MeanStack"):
+            fitted[name] = m
+        print(f"    {name:<20} R²={row['R2']:.4f}  RMSE={row['RMSE']:.3f}  fit {t_fit:.1f}s", flush=True)
+    R["metrics"] = metrics; R["yte"] = yte; R["preds"] = preds
+    hyp, mc = fitted["HyPhysML"], fitted["HyPhysML-MC"]
 
-_abl_agg = (_abl_full.groupby("Variant")
-            .agg(R2_mean=("R2","mean"), R2_std=("R2","std"),
-                 RMSE_mean=("RMSE","mean"), RMSE_std=("RMSE","std"),
-                 MAPE_mean=("MAPE","mean"), MAPE_std=("MAPE","std"),
-                 Time_mean=("Time_s","mean"))
-            .reset_index()
-            .sort_values("R2_mean", ascending=False))
+    # meta-learner [R2-6, R2-7]
+    R["meta"] = {"names": hyp.base_names_, "coef": hyp.meta_coef_, "intercept": hyp.meta_intercept_,
+                 "oof_r2": hyp.oof_r2_, "oof_resid_corr": hyp.oof_resid_corr_}
+    R["meta_mc"] = {"names": mc.base_names_, "coef": mc.meta_coef_, "intercept": mc.meta_intercept_}
 
-# ── Print results ────────────────────────────────────────────────
-_ref_rows = _abl_agg[_abl_agg["Variant"]=="HyPhysML (Full)"]["R2_mean"].values
-_ref_r2   = _ref_rows[0] if len(_ref_rows) else _abl_agg["R2_mean"].iloc[0]
-_order  = ["HyPhysML (Full)","HyPhysML-noHPO","HyPhysML-MeanStack","XGBoost (Single Model, HPO)"]
+    # auxiliary physics regression [R2-2]
+    R["physics"] = {"with_type": ObenausModel(with_type=True).fit(Xtr, ytr).coef_dict_,
+                    "without_type": ObenausModel(with_type=False).fit(Xtr, ytr).coef_dict_}
 
-print("\n" + "="*78)
-print("  ABLATION RESULTS — HyPhysML Component Contribution Analysis (n=10 seeds)")
-print("="*78)
-print(f"  {'Variant':<35} {'R2 (mean+-std)':<20} {'RMSE (kV)':<12} {'MAPE%':<9} {'Delta_R2':>9}")
-print("  " + "-"*76)
-for v in _order:
-    row = _abl_agg[_abl_agg["Variant"]==v]
-    if len(row) == 0: continue
-    r     = row.iloc[0]
-    delta = r.R2_mean - _ref_r2
-    sign  = "+" if delta >= 0 else ""
-    arrow = " [REF]" if delta == 0 else (" [DEGRADED]" if delta < -0.0001 else " [EQ]")
-    print(f"  {v:<35} {r.R2_mean:.4f}+-{r.R2_std:.4f}   {r.RMSE_mean:.4f}       {r.MAPE_mean:.3f}%   {sign}{delta:.4f}{arrow}")
-print("="*78)
-print("  Delta_R2 = difference relative to full HyPhysML (reference)")
-print("  DEGRADED = removing this component hurt performance")
+    # per-type performance [R2-9]
+    st = raw_te["Sample"].values
+    R["per_type"] = [dict(Type=f"Smp_{s}", n_test=int((st == s).sum()),
+                          **compute_metrics(yte[st == s], preds["HyPhysML"][st == s])) for s in SMP_LEVELS]
 
-# ── Save to Excel ────────────────────────────────────────────────
-_abl_path = os.path.join(OUT_DIR, "Table_Ablation.xlsx")
-with pd.ExcelWriter(_abl_path, engine="openpyxl") as _wr:
-    _abl_agg.to_excel(_wr, sheet_name="Ablation_Summary", index=False)
-    _abl_full.to_excel(_wr, sheet_name="Ablation_Raw", index=False)
+    # monotonicity audit + response curves [R2-2] [R2-8]
+    R["audit"], R["curves"], R["ice"] = {}, {}, {}
+    for nm in ("HyPhysML", "HyPhysML-MC", "XGBoost"):
+        a, c, i = monotonicity_audit(fitted[nm], raw_te, ice_n=60 if seed == POST_SEED else 0, seed=seed)
+        R["audit"][nm], R["curves"][nm], R["ice"][nm] = a, c, i
+        print(f"    audit {nm:<12}", {k: round(v["pct_steps_increasing"], 2) for k, v in a.items()})
 
-print(f"\n[OK] Ablation table saved: {_abl_path}")
-print("     -> Open Table_Ablation.xlsx to review results.")
-print("     -> To be included as Table 7 in the paper.")
+    # noise [R2-3]
+    std_ref = {v: float(raw_tr[v].std()) for v in NOISE_FEATS}
+    R["noise"] = {}
+    for nm in ("HyPhysML", "HyPhysML-MC"):
+        rows, r0 = noise_eval(fitted[nm], raw_te, yte, std_ref, seed)
+        R["noise"][nm] = {"rows": rows, "R2_0": r0}
+    R["noise_std_ref"] = std_ref
 
+    # learning curve [R2-4]
+    if seed in LC_SEEDS:
+        lc = []
+        for frac in LC_FRACS:
+            if frac < 1:
+                sub, _ = train_test_split(np.arange(len(tr)), train_size=frac, random_state=seed,
+                                          stratify=raw_tr["Sample"].values)
+            else:
+                sub = np.arange(len(tr))
+            mdl = HyPhysML(params=P, random_state=seed).fit(Xtr[sub], ytr[sub])
+            lc.append({"Seed": seed, "frac": frac, "n_train": len(sub),
+                       "R2_train": float(r2_score(ytr[sub], mdl.predict(Xtr[sub]))),
+                       "R2_test": float(r2_score(yte, mdl.predict(Xte)))})
+            print(f"    LC frac={frac:.2f} n={len(sub)} test R²={lc[-1]['R2_test']:.4f}", flush=True)
+        R["learning_curve"] = lc
 
+    # interpretation on the representative split
+    if seed == POST_SEED:
+        section(f"Seed {seed}: interpretation (SHAP of the full stack, permutation importance)")
+        R["ci_obs"] = {nm: boot_ci_observations(yte, preds[nm]) for nm in MODEL_NAMES + EXTRA_VARIANTS}
+        if HAS_SHAP:
+            rng = np.random.RandomState(42)
+            X_bg = Xtr[rng.choice(len(Xtr), N_SHAP_BG, replace=False)]
+            sel = rng.choice(len(Xte), N_SHAP, replace=False); X_ex = Xte[sel]
+            phi, base, meth, err = stack_shap(hyp, X_bg, X_ex)
+            R["shap"] = {"phi": phi, "X_ex": X_ex, "base": base, "method": meth, "additivity_err": err}
+            print(f"    stack SHAP methods={meth}  max additivity error={err:.4f} kV")
+            try:
+                e = shap.TreeExplainer(hyp.bl_fit_["XGBoost"], data=X_bg, feature_perturbation="interventional")
+                R["shap_xgb_only"] = np.asarray(e.shap_values(X_ex, check_additivity=False))
+            except Exception as ex:
+                print("    XGBoost-only SHAP failed:", ex)
+        pi = permutation_importance(hyp, Xte, yte, n_repeats=N_PERM_REP, random_state=42, n_jobs=1, scoring="r2")
+        R["perm"] = {"mean": pi.importances_mean, "sd": pi.importances_std}
+        R["perm_raw"] = grouped_raw_permutation(hyp, raw_te, yte, N_PERM_REP, seed)
+        print(R["perm_raw"].to_string(index=False))
 
-# ========================================================================
-# [CODE CELL 6]
-# ========================================================================
-# ── Zip results ───────────────────────────────────────────────────
-import zipfile, os
+    R["minutes"] = round((time.time() - T0) / 60, 1)
+    pickle.dump(R, open(ck, "wb"))
+    print(f"  seed {seed} done in {R['minutes']} min -> {ck}", flush=True)
 
-zip_path = os.path.join(OUT_DIR, "fov_results_ultimate.zip")
-with zipfile.ZipFile(zip_path,"w",zipfile.ZIP_DEFLATED) as zf:
-    for fname in sorted(os.listdir(OUT_DIR)):
-        fpath=os.path.join(OUT_DIR,fname)
-        if os.path.isfile(fpath) and not fname.endswith(".zip"):
-            zf.write(fpath,fname)
+section("§9  Per-seed runs")
+for s in RUN_SEEDS:
+    run_seed(s)
 
-size_mb=os.path.getsize(zip_path)/1024/1024
-print(f"✅ {size_mb:.1f} MB — Zip file ready: {zip_path}")
+missing = [s for s in SEEDS if not os.path.isfile(os.path.join(CK_DIR, f"seed{s}.pkl"))]
+if missing:
+    print(f"\n  Seeds still missing: {missing}. Aggregation runs once all seeds are checkpointed.")
+    sys.exit(0)
 
+# ════════════════════════════════════════════════════════════════════════
+# §10  OPTIONAL: old learning-curve protocol (diagnostic)  [R2-4]
+# ════════════════════════════════════════════════════════════════════════
+RES = {s: pickle.load(open(os.path.join(CK_DIR, f"seed{s}.pkl"), "rb")) for s in SEEDS}
+P42 = RES[POST_SEED]["params"]
 
+lcdiag_ck = os.path.join(CK_DIR, "lc_diagnostic.pkl")
+if RUN_LC_DIAGNOSTIC and not os.path.isfile(lcdiag_ck):
+    section("§10  Learning-curve diagnostic: old vs corrected 5-fold CV at full size")
+    rows = []
+    for lab, cv in [("unshuffled KFold on type-ordered rows (old learning curve)", KFold(5, shuffle=False)),
+                    ("shuffled KFold (seed 42)", KFold(5, shuffle=True, random_state=42))]:
+        sc = []
+        for k, (ti, vi) in enumerate(cv.split(X_all)):
+            m = HyPhysML(params=P42, random_state=42).fit(X_all[ti], y_all[ti])
+            sc.append(r2_score(y_all[vi], m.predict(X_all[vi])))
+            types_in_val = sorted(set(STRAT[vi]))
+            rows.append({"protocol": lab, "fold": k + 1, "R2": sc[-1], "types_in_validation": str(types_in_val),
+                         "RH_levels_in_validation": str(sorted(set(df_raw['RH'].values[vi])))})
+            print(f"    {lab[:30]:<30} fold {k + 1}: R²={sc[-1]:.4f}  types={types_in_val}", flush=True)
+        print(f"    -> mean {np.mean(sc):.4f} ± {np.std(sc):.4f}")
+    pickle.dump(pd.DataFrame(rows), open(lcdiag_ck, "wb"))
+
+# ════════════════════════════════════════════════════════════════════════
+# §11  OPTIONAL: leave-one-level-out extrapolation  [R1-3]
+# ════════════════════════════════════════════════════════════════════════
+extra_ck = os.path.join(CK_DIR, "extrapolation.pkl")
+if RUN_EXTRAPOLATION and not os.path.isfile(extra_ck):
+    section("§11  Leave-one-level-out extrapolation (fixed default settings, no tuning)")
+    ex_rows = []
+    factors = {"SDD": AUDIT_LEVELS["SDD"], "RH": AUDIT_LEVELS["RH"],
+               "Aging": AUDIT_LEVELS["Aging"], "Sample": SMP_LEVELS}
+    if FAST:
+        factors = {"SDD": AUDIT_LEVELS["SDD"]}
+    ex_models = {"HyPhysML": lambda: HyPhysML(params=DEFAULT_PARAMS, random_state=42),
+                 "HyPhysML-MC": lambda: HyPhysMLMC(params=DEFAULT_PARAMS, random_state=42),
+                 "XGBoost": lambda: build("XGBoost", DEFAULT_PARAMS["XGBoost"], 42),
+                 "Obenaus": lambda: ObenausModel()}
+    tr, te = split(42)            # in-grid reference with the same fixed settings
+    for nm, mk in ex_models.items():
+        m = mk().fit(X_all[tr], y_all[tr])
+        ex_rows.append({"Factor": "random 80/20 (seed 42)", "Held_out_level": "-", "Position": "interpolation",
+                        "Model": nm, "n_test": len(te), **compute_metrics(y_all[te], m.predict(X_all[te]))})
+    for fac, levels in factors.items():
+        for i, L in enumerate(levels):
+            msk = df_raw[fac].values == L
+            pos = "interior" if 0 < i < len(levels) - 1 else "boundary (extrapolation)"
+            if fac == "Sample":
+                pos = "unseen insulator type"
+            for nm, mk in ex_models.items():
+                m = mk().fit(X_all[~msk], y_all[~msk]); yp = m.predict(X_all[msk])
+                ex_rows.append({"Factor": fac, "Held_out_level": L, "Position": pos, "Model": nm,
+                                "n_test": int(msk.sum()), **compute_metrics(y_all[msk], yp)})
+                print(f"    hold out {fac}={L:<6} {nm:<12} RMSE={ex_rows[-1]['RMSE']:.3f}  "
+                      f"MAPE={ex_rows[-1]['MAPE']:.2f}%", flush=True)
+    pickle.dump(pd.DataFrame(ex_rows), open(extra_ck, "wb"))
+
+# ════════════════════════════════════════════════════════════════════════
+# §12  AGGREGATION: tables
+# ════════════════════════════════════════════════════════════════════════
+section("§12  Aggregation")
+res_df = pd.DataFrame([r for s in SEEDS for r in RES[s]["metrics"]])
+savetab(res_df, "results_all_seeds.csv")
+ALL_M = MODEL_NAMES + EXTRA_VARIANTS
+agg = (res_df.groupby("Model").agg(R2_mean=("R2", "mean"), R2_std=("R2", "std"),
+                                   RMSE_mean=("RMSE", "mean"), RMSE_std=("RMSE", "std"),
+                                   MAE_mean=("MAE", "mean"), MAE_std=("MAE", "std"),
+                                   MAPE_mean=("MAPE", "mean"), MAPE_std=("MAPE", "std"),
+                                   NSE_mean=("NSE", "mean"), R2_train_mean=("R2_train", "mean"),
+                                   Time_fit_mean=("Time_fit_s", "mean"), Time_fit_std=("Time_fit_s", "std"),
+                                   Pred_ms_per_sample=("Time_predict_ms_per_sample", "mean"))
+       .sort_values("R2_mean", ascending=False))
+agg["Overfit_gap"] = agg["R2_train_mean"] - agg["R2_mean"]
+_ci = {m: boot_ci_seed_mean(res_df.loc[res_df.Model == m, "R2"].values) for m in ALL_M}
+agg["R2_CI95_seedmean_lo"] = [_ci[m][0] for m in agg.index]
+agg["R2_CI95_seedmean_hi"] = [_ci[m][1] for m in agg.index]
+_ci42 = RES[POST_SEED]["ci_obs"]
+agg["R2_seed42"] = [res_df[(res_df.Model == m) & (res_df.Seed == POST_SEED)]["R2"].values[0] for m in agg.index]
+agg["R2_CI95_seed42_obs_lo"] = [_ci42[m][0] for m in agg.index]
+agg["R2_CI95_seed42_obs_hi"] = [_ci42[m][1] for m in agg.index]
+savetab(agg.round(5), "Tab2_results_summary_all_models.csv", index=True)
+agg14 = agg.loc[[m for m in agg.index if m in MODEL_NAMES]]
+BEST = agg14.index[0]
+print(agg14[["R2_mean", "R2_std", "RMSE_mean", "MAPE_mean"]].round(4).to_string())
+print(f"  Best of the 14 models: {BEST}")
+
+# statistical tests (14 models; reference = HyPhysML)  [R2-5]
+R2M = {m: res_df[res_df.Model == m].sort_values("Seed")["R2"].values for m in ALL_M}
+fr, fp = stats.friedmanchisquare(*[R2M[m] for m in MODEL_NAMES])
+alpha_b = 0.05 / (len(MODEL_NAMES) - 1)
+st_rows = []
+REF = "HyPhysML"
+for m in [x for x in agg14.index if x != REF] + EXTRA_VARIANTS:
+    try:
+        p1 = stats.wilcoxon(R2M[REF], R2M[m], alternative="greater").pvalue
+        p2 = stats.wilcoxon(R2M[REF], R2M[m], alternative="two-sided").pvalue
+    except ValueError:
+        p1 = p2 = 1.
+    d, sz = cliffs_delta(R2M[REF], R2M[m])
+    diff = R2M[REF] - R2M[m]
+    lo, hi = boot_ci_seed_mean(diff)
+    st_rows.append({"vs": m, "wins_of_10": int((diff > 0).sum()), "mean_dR2": diff.mean(),
+                    "dR2_CI95_lo": lo, "dR2_CI95_hi": hi,
+                    "mean_dRMSE_kV": (res_df[res_df.Model == m].sort_values("Seed")["RMSE"].values
+                                      - res_df[res_df.Model == REF].sort_values("Seed")["RMSE"].values).mean(),
+                    "p_one_sided": p1, "p_two_sided": p2,
+                    "significant_bonferroni": (p1 < alpha_b) if m in MODEL_NAMES else "n/a (variant)",
+                    "cliffs_delta": d, "effect": sz})
+st_df = pd.DataFrame(st_rows)
+print(f"  Friedman chi2({len(MODEL_NAMES) - 1})={fr:.2f}  P={fp:.2e}   Bonferroni alpha={alpha_b:.5f}")
+print(st_df.round(6).to_string(index=False))
+savetab(st_df.round(6), "Tab3_statistical_tests.csv")
+pd.DataFrame([{"Friedman_chi2": fr, "df": len(MODEL_NAMES) - 1, "P": fp, "alpha_bonferroni": alpha_b}]) \
+    .to_csv(os.path.join(TAB_DIR, "Tab3_friedman.csv"), index=False)
+
+# hyperparameters per seed  [R2-6]
+hp_rows = []
+for s in SEEDS:
+    for nm, p in RES[s]["params"].items():
+        for k, v in p.items():
+            hp_rows.append({"Model": nm, "Hyperparameter": k, "Seed": s, "Value": v,
+                            "Search space": SEARCH_SPACES.get(nm, {}).get(k, "-"),
+                            "Inner CV R2": RES[s]["hpo"].get(nm, {}).get("cv_r2", np.nan) if RES[s]["hpo"] else np.nan})
+hp_df = pd.DataFrame(hp_rows); savetab(hp_df, "TabS8_hyperparameters_per_seed.csv")
+def _summ(v):
+    v = list(v)
+    if all(isinstance(x, (int, float, np.integer, np.floating)) and not isinstance(x, bool) for x in v):
+        return f"{np.median(v):.4g} [{np.min(v):.4g}, {np.max(v):.4g}]"
+    vc = pd.Series([str(x) for x in v]).value_counts()
+    return "; ".join(f"{k} ({c}/{len(v)})" for k, c in vc.items())
+hp_sum = (hp_df.groupby(["Model", "Hyperparameter", "Search space"])["Value"]
+          .apply(_summ).reset_index().rename(columns={"Value": "Selected: median [min, max] over seeds"}))
+hp_s42 = hp_df[hp_df.Seed == POST_SEED][["Model", "Hyperparameter", "Value"]].rename(columns={"Value": "Seed 42"})
+hp_sum = hp_sum.merge(hp_s42, on=["Model", "Hyperparameter"], how="left")
+hp_sum["Model"] = pd.Categorical(hp_sum["Model"], TUNABLE, ordered=True)
+hp_sum = hp_sum.sort_values(["Model", "Hyperparameter"])
+savetab(hp_sum, "TabS8_hyperparameters_summary.csv")
+pre = pd.DataFrame([
+    {"Model": m, "Preprocessing": "RobustScaler (median/IQR) fitted on the training data of each fit, inside a Pipeline"
+     if m in SCALED else "none (raw 25 features)"} for m in TUNABLE] + [
+    {"Model": "Obenaus / Rizk", "Preprocessing": "log-transform of inputs and target; ridge alpha=0.01 with intercept"},
+    {"Model": "HyPhysML meta-learner", "Preprocessing": "ridge alpha=0.1 WITH intercept on OOF predictions (no scaling)"},
+    {"Model": "HyPhysML-MC meta-learner", "Preprocessing": "ridge alpha=0.1 with intercept, weights constrained >= 0"}])
+savetab(pre, "TabS8b_preprocessing.csv")
+
+# meta weights  [R2-7]
+mw = pd.DataFrame([dict(zip(RES[s]["meta"]["names"], RES[s]["meta"]["coef"]),
+                        intercept=RES[s]["meta"]["intercept"], Seed=s) for s in SEEDS])
+mw_sum = mw.drop(columns="Seed").agg(["mean", "std", "min", "max"]).T
+mw_sum["n_negative_of_10"] = (mw.drop(columns="Seed") < 0).sum()
+savetab(mw, "TabS12_meta_weights_per_seed.csv"); savetab(mw_sum.round(4), "TabS12_meta_weights_summary.csv", index=True)
+print(mw_sum.round(3).to_string())
+oof = pd.DataFrame([dict(RES[s]["meta"]["oof_r2"], Seed=s) for s in SEEDS])
+savetab(oof.round(5), "TabS12b_base_learner_oof_r2.csv")
+corr_mean = np.mean([RES[s]["meta"]["oof_resid_corr"] for s in SEEDS], axis=0)
+savetab(pd.DataFrame(corr_mean, index=BASE_LEARNERS, columns=BASE_LEARNERS).round(3),
+        "TabS12c_oof_residual_correlation.csv", index=True)
+mwmc = pd.DataFrame([dict(zip(RES[s]["meta_mc"]["names"], RES[s]["meta_mc"]["coef"]),
+                          intercept=RES[s]["meta_mc"]["intercept"], Seed=s) for s in SEEDS])
+savetab(mwmc, "TabS_MC_meta_weights_per_seed.csv")
+
+# physics regression  [R2-2]
+ph_rows = []
+for variant in ("with_type", "without_type"):
+    C = pd.DataFrame([RES[s]["physics"][variant] for s in SEEDS])
+    for k in PHY_NAMES:
+        exp_sign = SIGN_CHECKS.get(k)
+        ph_rows.append({"Regression": "with type indicators" if variant == "with_type" else "without type indicators",
+                        "Coefficient": k, "mean": C[k].mean(), "sd": C[k].std(), "min": C[k].min(), "max": C[k].max(),
+                        "expected_sign": {-1: "negative", 1: "positive", None: "-"}[exp_sign],
+                        "sign_as_expected_seeds": int((np.sign(C[k]) == exp_sign).sum()) if exp_sign else "-",
+                        "identifiable": "no (collinear with type indicators)"
+                        if (variant == "with_type" and k in ("log_CD", "log_AD")) else "yes"})
+ph_df = pd.DataFrame(ph_rows); savetab(ph_df.round(5), "Tab4_physics_coefficients.csv"); print(ph_df.round(4).to_string(index=False))
+
+# per type
+pt = pd.DataFrame([dict(r, Seed=s) for s in SEEDS for r in RES[s]["per_type"]])
+pt_sum = pt.groupby("Type").agg(n_test=("n_test", "first"), R2_mean=("R2", "mean"), R2_sd=("R2", "std"),
+                                RMSE_mean=("RMSE", "mean"), MAE_mean=("MAE", "mean"), MAPE_mean=("MAPE", "mean"))
+savetab(pt, "TabS5_per_type_all_seeds.csv"); savetab(pt_sum.round(4), "TabS5_per_type_summary.csv", index=True)
+savetab(pt[pt.Seed == POST_SEED].round(4), "TabS5_per_type_seed42.csv")
+
+# residuals
+resid_all = np.concatenate([RES[s]["yte"] - RES[s]["preds"]["HyPhysML"] for s in SEEDS])
+r42 = RES[POST_SEED]["yte"] - RES[POST_SEED]["preds"]["HyPhysML"]
+W42, p42 = shapiro(r42)
+Wall, pall = shapiro(np.random.RandomState(0).choice(resid_all, 5000, replace=False)) if len(resid_all) > 5000 else shapiro(resid_all)
+res_tab = pd.DataFrame([
+    {"Scope": "seed 42 test set", "n": len(r42), "mean_kV": r42.mean(), "sd_kV": r42.std(ddof=1), "Shapiro_W": W42, "Shapiro_p": p42},
+    {"Scope": "pooled, 10 seeds (Shapiro on random 5000)", "n": len(resid_all), "mean_kV": resid_all.mean(),
+     "sd_kV": resid_all.std(ddof=1), "Shapiro_W": Wall, "Shapiro_p": pall}])
+savetab(res_tab.round(5), "TabS6_residuals.csv")
+
+# learning curve
+lc = pd.DataFrame([r for s in SEEDS for r in RES[s].get("learning_curve", [])])
+lc_sum = lc.groupby("frac").agg(n_train=("n_train", "mean"), R2_train_mean=("R2_train", "mean"),
+                                R2_train_sd=("R2_train", "std"), R2_test_mean=("R2_test", "mean"),
+                                R2_test_sd=("R2_test", "std")).reset_index()
+lc_sum["gap"] = lc_sum["R2_train_mean"] - lc_sum["R2_test_mean"]
+savetab(lc, "TabS6b_learning_curve_raw.csv"); savetab(lc_sum.round(5), "TabS6b_learning_curve_summary.csv")
+if os.path.isfile(lcdiag_ck):
+    lcd = pickle.load(open(lcdiag_ck, "rb")); savetab(lcd.round(5), "R2-4_learning_curve_diagnostic.csv")
+
+# noise
+nz = pd.DataFrame([dict(r, Model=nm, Seed=s) for s in SEEDS for nm in RES[s]["noise"] for r in RES[s]["noise"][nm]["rows"]])
+nz_sum = (nz.groupby(["Model", "mode", "Feature", "Noise_pct"])
+          .agg(R2_mean=("R2", "mean"), R2_sd=("R2", "std"), dR2_mean=("dR2", "mean"), dR2_sd=("dR2", "std"),
+               RMSE_mean=("RMSE", "mean"), pct_clipped=("pct_clipped", "mean"), n=("R2", "size")).reset_index())
+r0 = pd.DataFrame([{"Model": nm, "Seed": s, "R2_0": RES[s]["noise"][nm]["R2_0"]} for s in SEEDS for nm in RES[s]["noise"]])
+savetab(nz, "TabS1_noise_raw.csv"); savetab(nz_sum.round(6), "TabS1_noise_summary.csv")
+print(nz_sum[(nz_sum.Model == "HyPhysML")].round(5).to_string(index=False))
+
+# monotonicity audit
+au = pd.DataFrame([dict(v, Model=nm, Variable=var, Seed=s) for s in SEEDS for nm in RES[s]["audit"]
+                   for var, v in RES[s]["audit"][nm].items()])
+au_sum = au.groupby(["Model", "Variable"]).agg(
+    pct_steps_increasing=("pct_steps_increasing", "mean"),
+    pct_steps_increasing_gt_0_1kV=("pct_steps_increasing_gt_0.1kV", "mean"),
+    pct_points_any_violation=("pct_points_any_violation", "mean"),
+    max_increase_kV=("max_increase_kV", "max")).reset_index()
+_dm = _mono_data.set_index("Factor")["pct_steps_FOV_decreases"]
+au_sum["data_pct_steps_increasing"] = [round(100 - _dm.get(v, np.nan), 2) for v in au_sum["Variable"]]
+savetab(au, "R2-2_monotonicity_audit_all_seeds.csv"); savetab(au_sum.round(4), "R2-2_monotonicity_audit_summary.csv")
+print(au_sum.round(3).to_string(index=False))
+
+# ablation
+abl = agg.loc[[m for m in ["HyPhysML", "HyPhysML-MC", "XGBoost", "HyPhysML-noHPO", "HyPhysML-MeanStack"] if m in agg.index],
+              ["R2_mean", "R2_std", "RMSE_mean", "MAPE_mean", "Time_fit_mean"]]
+abl["dR2_vs_full"] = abl["R2_mean"] - agg.loc["HyPhysML", "R2_mean"]
+savetab(abl.round(5), "TabS7_ablation.csv", index=True)
+
+# extrapolation
+if os.path.isfile(extra_ck):
+    ex = pickle.load(open(extra_ck, "rb")); savetab(ex.round(4), "R1-3_extrapolation_leave_one_level_out.csv")
+    print(ex.pivot_table(index=["Factor", "Held_out_level"], columns="Model", values="RMSE").round(3).to_string())
+
+# HPO time
+hpo_t = pd.DataFrame([{"Seed": s, "Model": nm, "minutes": v["minutes"], "inner_cv_r2": v["cv_r2"]}
+                      for s in SEEDS for nm, v in RES[s]["hpo"].items() if not nm.startswith("_")]) if not SKIP_HPO else pd.DataFrame()
+if len(hpo_t):
+    savetab(hpo_t, "hpo_time_and_inner_cv.csv")
+
+# ════════════════════════════════════════════════════════════════════════
+# §13  FIGURES
+# ════════════════════════════════════════════════════════════════════════
+section("§13  Figures")
+R42 = RES[POST_SEED]; yte42 = R42["yte"]; LABEL = {m: m for m in ALL_M}
+ORD = list(agg14.index)
+
+# Fig 1 — predicted vs actual, seed 42  [R2-5] [R2-9]
+yp = R42["preds"]["HyPhysML"]; rr = yte42 - yp; m42 = compute_metrics(yte42, yp); lo42, hi42 = _ci42["HyPhysML"]
+fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+sc = axes[0].scatter(yte42, yp, c=rr, cmap="RdBu", s=14, alpha=0.6, vmin=-5, vmax=5)
+mv, xv = min(yte42.min(), yp.min()), max(yte42.max(), yp.max()); axes[0].plot([mv, xv], [mv, xv], "k--")
+axes[0].set(xlabel="Actual FOV (kV)", ylabel="Predicted FOV (kV)",
+            title=f"(a) HyPhysML, seed 42, n={len(yte42)}\nR²={m42['R2']:.4f} [95% CI of this split {lo42:.4f}, {hi42:.4f}]  RMSE={m42['RMSE']:.3f} kV")
+plt.colorbar(sc, ax=axes[0], label="Residual (kV)", fraction=0.03)
+axes[1].scatter(yp, rr, s=10, alpha=0.5, color=PALETTE[0]); axes[1].axhline(0, color="k", ls="--")
+for sg in (2, -2):
+    axes[1].axhline(sg * rr.std(), color="red", ls=":", label=f"{sg}σ = {sg * rr.std():.2f} kV")
+axes[1].set(xlabel="Predicted FOV (kV)", ylabel="Residual (kV)", title="(b) Residuals"); axes[1].legend()
+plt.tight_layout(); savefig("Fig1_predicted_vs_actual_seed42.png")
+
+# Fig S9 — 14-model grid  [R2-8]
+fig, axes = plt.subplots(4, 4, figsize=(18, 18)); axes = axes.ravel()
+for ax, nm in zip(axes, ORD):
+    p_ = R42["preds"][nm]; mm = compute_metrics(yte42, p_)
+    ax.scatter(yte42, p_, s=4, alpha=0.4, color=PALETTE[0] if nm == "HyPhysML" else "gray")
+    ax.plot([yte42.min(), yte42.max()], [yte42.min(), yte42.max()], "r--", lw=1)
+    ax.set_title(f"{nm}\nR²={mm['R2']:.4f}  RMSE={mm['RMSE']:.2f} kV", fontsize=10)
+    ax.set_xlabel("Actual (kV)", fontsize=9); ax.set_ylabel("Predicted (kV)", fontsize=9)
+for ax in axes[len(ORD):]:
+    ax.set_visible(False)
+plt.suptitle(f"Predicted vs actual FOV, 14 models, seed-42 test set (n={len(yte42)})", fontweight="bold")
+plt.tight_layout(); savefig("FigS09_all_models_pred_vs_actual_seed42.png")
+
+# Fig S8 — box plots R², RMSE, MAPE  [R2-8]
+fig, axes = plt.subplots(1, 3, figsize=(19, 6))
+for ax, (met, lab) in zip(axes, [("R2", "R² (higher is better)"), ("RMSE", "RMSE, kV (lower is better)"),
+                                 ("MAPE", "MAPE, % (lower is better)")]):
+    data = [res_df[res_df.Model == m][met].values for m in ORD]
+    bp = ax.boxplot(data, patch_artist=True, medianprops=dict(color="black"))
+    for patch, col in zip(bp["boxes"], PALETTE): patch.set_facecolor(col); patch.set_alpha(0.75)
+    ax.set_xticks(range(1, len(ORD) + 1)); ax.set_xticklabels(ORD, rotation=45, ha="right", fontsize=8)
+    ax.set_ylabel(lab)
+plt.suptitle("Distribution over the 10 evaluation seeds (14 models)", fontweight="bold")
+plt.tight_layout(); savefig("FigS08_model_comparison_boxplots_R2_RMSE_MAPE.png")
+
+# Fig S21 — mean R² with seed-level CI  [R2-5]
+fig, ax = plt.subplots(figsize=(14, 6)); x = np.arange(len(ORD))
+mu = agg14["R2_mean"].values
+ax.bar(x, mu, color=PALETTE[:len(ORD)], alpha=0.8)
+ax.errorbar(x, mu, yerr=[mu - agg14["R2_CI95_seedmean_lo"].values, agg14["R2_CI95_seedmean_hi"].values - mu],
+            fmt="none", color="black", capsize=4, label="95% bootstrap CI of the 10-seed mean")
+ax.set_xticks(x); ax.set_xticklabels(ORD, rotation=45, ha="right"); ax.set_ylabel("Mean test R² over 10 seeds")
+ax.set_ylim(max(0, mu.min() - 0.05), 1.0); ax.legend()
+plt.tight_layout(); savefig("FigS21_mean_r2_seedlevel_ci.png")
+
+# Fig 2 / S11 — SHAP of the full stack
+if "shap" in R42:
+    phi = R42["shap"]["phi"]; Xex = R42["shap"]["X_ex"]; mabs = np.abs(phi).mean(0); so = np.argsort(mabs)[::-1]
+    savetab(pd.DataFrame({"Feature": [FN[i] for i in so], "mean_abs_SHAP_kV": mabs[so]}).round(5), "Fig2_shap_stack_values.csv")
+    if "shap_xgb_only" in R42:
+        mx = np.abs(R42["shap_xgb_only"]).mean(0)
+        savetab(pd.DataFrame({"Feature": FN, "stack": mabs, "xgboost_only": mx}).sort_values("stack", ascending=False).round(5),
+                "Fig2_shap_stack_vs_xgboost_only.csv")
+    top = so[:15]
+    fig, ax = plt.subplots(figsize=(10, 7))
+    ax.barh(range(15), mabs[top][::-1], color=PALETTE[0], alpha=0.85)
+    ax.set_yticks(range(15)); ax.set_yticklabels([FN[i] for i in top][::-1])
+    ax.set(xlabel="Mean |SHAP| (kV)", title=f"SHAP of the full HyPhysML stack (seed 42, {len(Xex)} test points)")
+    plt.tight_layout(); savefig("Fig2_shap_bar_full_stack.png")
+    fig, ax = plt.subplots(figsize=(11, 8))
+    for rank, fi in enumerate(so[:10][::-1]):
+        v = Xex[:, fi]; vn = (v - v.min()) / (v.max() - v.min() + 1e-12)
+        ax.scatter(phi[:, fi], rank + np.random.RandomState(fi).uniform(-.3, .3, len(v)), c=vn, cmap="coolwarm", s=10, alpha=.6)
+    ax.set_yticks(range(10)); ax.set_yticklabels([FN[i] for i in so[:10][::-1]]); ax.axvline(0, color="k", ls="--")
+    ax.set(xlabel="SHAP value (kV)  (colour: feature value, blue low - red high)", title="SHAP beeswarm, full stack")
+    plt.tight_layout(); savefig("FigS11_shap_beeswarm_full_stack.png")
+
+# Fig S10 — permutation importance (engineered + grouped raw)
+pm = R42["perm"]; po = np.argsort(pm["mean"])[::-1][:15]
+fig, axes = plt.subplots(1, 2, figsize=(17, 7))
+axes[0].barh(range(15), pm["mean"][po][::-1], xerr=pm["sd"][po][::-1], color=PALETTE[2], alpha=.8)
+axes[0].set_yticks(range(15)); axes[0].set_yticklabels([FN[i] for i in po][::-1])
+axes[0].set(xlabel="Mean decrease in R²", title="(a) Single engineered column permuted")
+pr = R42["perm_raw"]
+axes[1].barh(range(len(pr)), pr["mean_R2_drop"].values[::-1], xerr=pr["sd"].values[::-1], color=PALETTE[3], alpha=.8)
+axes[1].set_yticks(range(len(pr))); axes[1].set_yticklabels(pr["Group"].values[::-1])
+axes[1].set(xlabel="Mean decrease in R²", title="(b) Raw input permuted, all derived features rebuilt")
+plt.tight_layout(); savefig("FigS10_permutation_importance_full_stack.png")
+savetab(pd.DataFrame({"Feature": FN, "mean": pm["mean"], "sd": pm["sd"]}).sort_values("mean", ascending=False).round(6),
+        "FigS10_perm_engineered.csv")
+savetab(pr.round(6), "FigS10_perm_raw_grouped.csv")
+
+# Fig S12 — meta weights mean ± sd  [R2-7]
+fig, ax = plt.subplots(figsize=(10, 4.5)); cols = BASE_LEARNERS
+ax.bar(range(len(cols)), mw[cols].mean(), yerr=mw[cols].std(), capsize=5, color=PALETTE[:len(cols)], alpha=.85)
+for i, c in enumerate(cols):
+    ax.scatter(np.full(len(mw), i) + np.random.RandomState(i).uniform(-.15, .15, len(mw)), mw[c], s=10, color="k", zorder=3)
+    ax.text(i, mw[c].mean() + mw[c].std() + 0.01, f"{mw[c].mean():.3f}", ha="center", fontsize=9)
+ax.axhline(0, color="k", lw=.8); ax.set_xticks(range(len(cols))); ax.set_xticklabels(cols, rotation=20)
+ax.set(ylabel="Ridge meta-weight", title=f"Meta-learner weights, mean ± s.d. over 10 seeds (intercept {mw['intercept'].mean():.3f} ± {mw['intercept'].std():.3f} kV)")
+plt.tight_layout(); savefig("FigS12_meta_weights_10seeds.png")
+
+# Fig S13 — auxiliary physics regression, no unsourced bands  [R2-2]
+fig, axes = plt.subplots(1, 2, figsize=(15, 5), sharey=True)
+for ax, variant, title in zip(axes, ["with type indicators", "without type indicators"],
+                              ["(a) with type indicators (CD, AD not identifiable)", "(b) without type indicators"]):
+    d = ph_df[ph_df.Regression == variant].set_index("Coefficient").loc[PHY_NAMES]
+    ax.barh(range(len(d)), d["mean"], xerr=d["sd"], color=["#2166AC" if v > 0 else "#D7191C" for v in d["mean"]], alpha=.85)
+    ax.set_yticks(range(len(d))); ax.set_yticklabels(d.index); ax.axvline(0, color="k")
+    ax.set(xlabel="β (log space), mean ± s.d. over 10 seeds", title=title)
+plt.suptitle("Auxiliary log-linear Obenaus regression (separate from HyPhysML; does not constrain it)", fontweight="bold")
+plt.tight_layout(); savefig("FigS13_physics_coefficients_auxiliary.png")
+
+# Fig 3 — noise, raw propagated (main) and single-column (comparison)  [R2-3]
+for mode, fname, ttl in [("raw_propagated", "Fig3_noise_raw_inputs_propagated.png",
+                          "Noise added to the raw input; all derived features rebuilt"),
+                         ("single_column", "FigS_noise_single_column_old_protocol.png",
+                          "Single-column perturbation (old protocol): derived features keep the clean value")]:
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.6))
+    for ax, var in zip(axes, NOISE_FEATS):
+        for nm, col in [("HyPhysML", PALETTE[0]), ("HyPhysML-MC", PALETTE[1])]:
+            d = nz_sum[(nz_sum.Model == nm) & (nz_sum["mode"] == mode) & (nz_sum.Feature == var)]
+            xs = [0] + d["Noise_pct"].tolist(); ys = [0] + d["dR2_mean"].tolist(); es = [0] + d["dR2_sd"].tolist()
+            ax.errorbar(xs, ys, yerr=es, marker="o", capsize=3, color=col, label=nm)
+        clip = nz_sum[(nz_sum.Model == "HyPhysML") & (nz_sum["mode"] == mode) & (nz_sum.Feature == var)]["pct_clipped"].max()
+        ax.axhline(0, color="k", lw=.8)
+        ax.set(xlabel=f"Noise s.d. (% of raw {var} s.d.)", ylabel="ΔR² vs clean test set",
+               title=f"{var}" + (f"  (max clipped {clip:.1f}%)" if mode == "raw_propagated" else ""))
+        ax.legend(fontsize=8)
+    plt.suptitle(ttl + f" — mean ± s.d. over {len(SEEDS)} seeds × {N_NOISE_REP} repetitions", fontweight="bold")
+    plt.tight_layout(); savefig(fname)
+
+# Fig S19 — learning curve  [R2-4]
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.errorbar(lc_sum["n_train"], lc_sum["R2_train_mean"], yerr=lc_sum["R2_train_sd"], marker="o", label="Training R²", capsize=3)
+ax.errorbar(lc_sum["n_train"], lc_sum["R2_test_mean"], yerr=lc_sum["R2_test_sd"], marker="s", label="Test R² (fixed test set)", capsize=3)
+ax.set(xlabel="Number of training records (stratified sub-sample of the 80% training set)", ylabel="R²",
+       title=f"HyPhysML learning curve, seeds {LC_SEEDS}"); ax.legend()
+plt.tight_layout(); savefig("FigS19_learning_curve_main_protocol.png")
+
+# Fig S20 — raw-input response curves (replace PDP)  [R2-8] [R1-1]
+fig, axes = plt.subplots(1, 4, figsize=(20, 4.6))
+for ax, var in zip(axes, AUDIT_LEVELS):
+    lv = AUDIT_LEVELS[var]
+    for nm, col in [("HyPhysML", PALETTE[0]), ("HyPhysML-MC", PALETTE[1]), ("XGBoost", PALETTE[2])]:
+        if nm == "HyPhysML" and R42["ice"].get(nm):
+            for line in R42["ice"][nm][var]:
+                ax.plot(lv, line, color=col, alpha=.07, lw=.8)
+        cs = np.array([RES[s]["curves"][nm][var] for s in SEEDS])
+        ax.errorbar(lv, cs.mean(0), yerr=cs.std(0), marker="o", color=col, label=nm, capsize=3)
+    sub = df_raw if var != "J" else df_raw[df_raw.K > 0]
+    ax.plot(lv, sub.groupby(var)["FOV"].mean().loc[lv].values, "k--", marker="x", label="measured (marginal mean)")
+    ax.set(xlabel=var, ylabel="FOV (kV)", title=f"Response to {var}")
+    if var == "SDD": ax.set_xscale("log")
+axes[0].legend(fontsize=8)
+plt.suptitle("Raw-input response curves: one raw variable set to each level for every test record, all features rebuilt",
+             fontweight="bold")
+plt.tight_layout(); savefig("FigS20_raw_input_response_curves.png")
+
+# Monotonicity audit figure  [R2-2]
+fig, ax = plt.subplots(figsize=(10, 4.5))
+vars_ = list(AUDIT_LEVELS); w = 0.2
+for k, nm in enumerate(["HyPhysML", "XGBoost", "HyPhysML-MC"]):
+    vals = [au_sum[(au_sum.Model == nm) & (au_sum.Variable == v)]["pct_steps_increasing"].values[0] for v in vars_]
+    ax.bar(np.arange(len(vars_)) + (k - 1.5) * w, vals, w, label=nm, color=PALETTE[[0, 2, 1][k]])
+ax.bar(np.arange(len(vars_)) + 1.5 * w, [100 - _dm[v] for v in vars_], w, label="measured data", color="gray")
+ax.set_xticks(np.arange(len(vars_))); ax.set_xticklabels(vars_)
+ax.set(ylabel="% of adjacent level steps where FOV rises", title="Prediction-level physical-consistency audit (10 seeds)")
+ax.legend(); plt.tight_layout(); savefig("FigS22_monotonicity_audit.png")
+
+# Fig S15, S16, S17, S18
+fig, ax = plt.subplots(figsize=(14, 5)); x = np.arange(len(ORD))
+ax.bar(x - .2, agg14["R2_train_mean"], .4, label="Train R²"); ax.bar(x + .2, agg14["R2_mean"], .4, label="Test R²")
+ax.set_xticks(x); ax.set_xticklabels(ORD, rotation=45, ha="right"); ax.set_ylim(0.6, 1.01); ax.legend()
+plt.tight_layout(); savefig("FigS15_train_vs_test_r2.png")
+tagg = agg14.sort_values("Time_fit_mean")
+fig, ax = plt.subplots(figsize=(14, 5))
+ax.bar(range(len(tagg)), tagg["Time_fit_mean"], yerr=tagg["Time_fit_std"], capsize=4, color=PALETTE[:len(tagg)])
+ax.set_yscale("log"); ax.set_xticks(range(len(tagg))); ax.set_xticklabels(tagg.index, rotation=45, ha="right")
+ax.set_ylabel("Training time per split (s, log scale)"); plt.tight_layout(); savefig("FigS16_computation_time.png")
+fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+for ax, met in zip(axes, ["R2", "RMSE", "MAPE"]):
+    g = pt.groupby("Type")[met]; ax.bar(g.mean().index, g.mean(), yerr=g.std(), capsize=4, color=PALETTE[:4])
+    ax.set_title(f"{met} by insulator type (mean ± s.d., 10 seeds)")
+    if met == "R2": ax.set_ylim(0.97, 1.0)
+plt.tight_layout(); savefig("FigS17_per_type_performance.png")
+fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+axes[0].hist(resid_all, bins=60, color=PALETTE[0]); axes[0].set(xlabel="Residual (kV)", title=f"Pooled residuals, 10 seeds (n={len(resid_all)})")
+axes[1].scatter(np.concatenate([RES[s]["preds"]["HyPhysML"] for s in SEEDS]), resid_all, s=2, alpha=.2)
+axes[1].axhline(0, color="r"); axes[1].set(xlabel="Predicted (kV)", ylabel="Residual (kV)")
+probplot(resid_all, plot=axes[2]); plt.tight_layout(); savefig("FigS18_residuals.png")
+
+# extrapolation figure  [R1-3]
+if os.path.isfile(extra_ck):
+    ex = pickle.load(open(extra_ck, "rb"))
+    facs = [f for f in ["SDD", "RH", "Aging", "Sample"] if f in ex.Factor.unique()]
+    fig, axes = plt.subplots(1, len(facs), figsize=(5 * len(facs), 4.5), squeeze=False); axes = axes[0]
+    ref = ex[ex.Factor.str.startswith("random")].set_index("Model")["RMSE"]
+    for ax, fac in zip(axes, facs):
+        d = ex[ex.Factor == fac]
+        for k, nm in enumerate(["HyPhysML", "HyPhysML-MC", "XGBoost", "Obenaus"]):
+            dd = d[d.Model == nm]
+            ax.plot([str(v) for v in dd.Held_out_level], dd.RMSE, marker="o", color=PALETTE[[0, 1, 2, 4][k]], label=nm)
+            ax.axhline(ref[nm], color=PALETTE[[0, 1, 2, 4][k]], ls=":", lw=1)
+        ax.set(xlabel=f"held-out {fac} level", ylabel="RMSE (kV)", title=f"Leave one {fac} level out")
+    axes[0].legend(fontsize=8)
+    plt.suptitle("Extrapolation to an unseen factor level (dotted: random 80/20 split, same settings)", fontweight="bold")
+    plt.tight_layout(); savefig("FigS23_extrapolation_leave_one_level_out.png")
+
+# ════════════════════════════════════════════════════════════════════════
+# §14  KEY NUMBERS FOR THE MANUSCRIPT + EXCEL WORKBOOK
+# ════════════════════════════════════════════════════════════════════════
+section("§14  Key numbers")
+h = agg.loc["HyPhysML"]; xg = agg.loc["XGBoost"]; ob = agg.loc["Obenaus"]
+sx = st_df.set_index("vs")
+L = []
+L.append("# HyPhysML revision — key numbers for the manuscript\n")
+L.append(f"Seeds: {SEEDS}; test n per seed: {sorted(set(RES[s]['n_test'] for s in SEEDS))}; N_OPTUNA={N_OPTUNA} (nested, per seed)\n")
+L.append("## Table 2 (10-seed means)\n")
+L.append(agg14[["R2_mean", "R2_std", "RMSE_mean", "MAE_mean", "MAPE_mean", "NSE_mean"]].round(4).to_string())
+L.append(f"\nBest of 14: {BEST}. HyPhysML R²={h.R2_mean:.4f} ± {h.R2_std:.4f}, RMSE={h.RMSE_mean:.3f} kV, MAPE={h.MAPE_mean:.2f}%")
+L.append(f"RMSE reduction vs Obenaus: {100 * (1 - h.RMSE_mean / ob.RMSE_mean):.1f}%;  ΔRMSE vs XGBoost: {xg.RMSE_mean - h.RMSE_mean:.3f} kV")
+L.append(f"Seed-level 95% CI of the mean R² (HyPhysML): [{h.R2_CI95_seedmean_lo:.4f}, {h.R2_CI95_seedmean_hi:.4f}]")
+L.append(f"Seed-42 split: R²={h.R2_seed42:.4f}, observation-bootstrap 95% CI [{h.R2_CI95_seed42_obs_lo:.4f}, {h.R2_CI95_seed42_obs_hi:.4f}], n={len(yte42)}")
+L.append(f"Friedman chi2({len(MODEL_NAMES) - 1}) = {fr:.2f}, P = {fp:.2e}")
+L.append("\n## Table 3\n" + st_df.round(6).to_string(index=False))
+L.append("\n## Meta-weights (mean, sd)\n" + mw_sum.round(4).to_string())
+L.append("\n## Auxiliary physics regression\n" + ph_df.round(4).to_string(index=False))
+L.append("\n## Monotonicity audit (% of adjacent steps where predicted FOV rises)\n" + au_sum.round(3).to_string(index=False))
+L.append("\n## Noise (HyPhysML)\n" + nz_sum[nz_sum.Model == "HyPhysML"].round(5).to_string(index=False))
+L.append("\n## Learning curve\n" + lc_sum.round(5).to_string(index=False))
+if os.path.isfile(lcdiag_ck):
+    L.append("\n## Learning-curve diagnostic\n" + pickle.load(open(lcdiag_ck, "rb")).round(4).to_string(index=False))
+L.append("\n## Ablation\n" + abl.round(5).to_string())
+L.append("\n## Per type (mean over seeds)\n" + pt_sum.round(4).to_string())
+L.append("\n## Residuals\n" + res_tab.round(4).to_string(index=False))
+L.append("\n## Data-level physics\n" + _mono_data.to_string(index=False) + "\n\n" + _exp_sum.to_string())
+if os.path.isfile(extra_ck):
+    L.append("\n## Extrapolation\n" + pickle.load(open(extra_ck, "rb")).round(4).to_string(index=False))
+L.append("\n## HPO/test overlap of the OLD protocol\n" + _ov_df.to_string(index=False))
+if "shap" in R42:
+    L.append(f"\nSHAP (full stack) methods: {R42['shap']['method']}; additivity error {R42['shap']['additivity_err']:.4f} kV")
+with open(os.path.join(OUT_DIR, "revision_key_numbers.md"), "w", encoding="utf-8") as f:
+    f.write("\n".join(L))
+print("\n".join(L[:12]))
+
+with pd.ExcelWriter(os.path.join(OUT_DIR, "revision_all_tables.xlsx"), engine="openpyxl") as wr:
+    for fn in sorted(os.listdir(TAB_DIR)):
+        if fn.endswith(".csv"):
+            pd.read_csv(os.path.join(TAB_DIR, fn)).to_excel(wr, sheet_name=fn[:-4][:31], index=False)
+print(f"\n  Done. Figures: {FIG_DIR}\n  Tables: {TAB_DIR}\n  Summary: revision_key_numbers.md")
